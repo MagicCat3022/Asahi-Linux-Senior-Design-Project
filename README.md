@@ -19,7 +19,7 @@ Put project notes and research in this branch. Create development branches from 
 
 ## Daily upstream sync
 
-The [sync workflow](.github/workflows/sync-upstream.yml) runs daily at **09:17 UTC** (5:17 a.m. Eastern Daylight Time / 4:17 a.m. Eastern Standard Time). It can also be run manually under **Actions -> Sync upstream kernel branches -> Run workflow**, using the `project` branch.
+The [sync workflow](.github/workflows/sync-upstream.yml) runs daily at **09:17 UTC** (5:17 a.m. Eastern Daylight Time / 4:17 a.m. Eastern Standard Time). It also runs when its workflow file changes on `project`, and can be run manually under **Actions -> Sync upstream kernel branches -> Run workflow**, using the `project` branch.
 
 Each tracked branch is updated independently through GitHub's API with `force: false`. No kernel checkout or personal access token is needed; the workflow uses the repository's built-in `GITHUB_TOKEN` with `contents: write` permission.
 
