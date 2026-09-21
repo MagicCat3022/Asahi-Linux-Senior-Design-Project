@@ -1,0 +1,65 @@
+name: Sync upstream kernel branches
+
+on:
+  schedule:
+    - cron: '17 9 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Sync ${{ matrix.branch }}
+    if: github.repository == 'MagicCat3022/Asahi-Linux-Senior-Design-Project' && github.ref == 'refs/heads/project'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: [main, fairydust, asahi]
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TARGET_REPO: ${{ github.repository }}
+      UPSTREAM_REPO: AsahiLinux/linux
+      SYNC_BRANCH: ${{ matrix.branch }}
+    steps:
+      - name: Fast-forward branch to upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          upstream_sha=$(gh api "repos/$UPSTREAM_REPO/git/ref/heads/$SYNC_BRANCH" --jq '.object.sha')
+          previous_sha=$(gh api "repos/$TARGET_REPO/git/ref/heads/$SYNC_BRANCH" --jq '.object.sha')
+
+          # GitHub checks ancestry at update time. Never force, reset, or merge
+          # a branch that has local commits or rewritten upstream history.
+          # Also PATCH an unchanged ref to verify write access on every run.
+          if ! updated_sha=$(gh api --method PATCH \
+            "repos/$TARGET_REPO/git/refs/heads/$SYNC_BRANCH" \
+            -f "sha=$upstream_sha" -F force=false --jq '.object.sha'); then
+            echo "::error::Cannot fast-forward $SYNC_BRANCH. Check the API error above for divergence or permissions; no forced update was attempted."
+            exit 1
+          fi
+
+          if [[ "$updated_sha" != "$upstream_sha" ]]; then
+            echo "::error::GitHub returned an unexpected commit for $SYNC_BRANCH."
+            exit 1
+          fi
+
+          if [[ "$previous_sha" == "$upstream_sha" ]]; then
+            result='Already up to date'
+          else
+            result='Fast-forwarded'
+          fi
+
+          {
+            printf '### %s\n\n' "$SYNC_BRANCH"
+            printf '%s with `%s` at the time of this run.\n\n' "$result" "$UPSTREAM_REPO"
+            printf -- '- Previous commit: `%s`\n' "$previous_sha"
+            printf -- '- Upstream commit: `%s`\n' "$upstream_sha"
+          } >> "$GITHUB_STEP_SUMMARY"
