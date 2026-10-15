@@ -1,6 +1,10 @@
 {
   "name": "j413-usbc-dp",
+  "description": "USB-C DisplayPort drivers on the MacBook Air M2 (J413)",
+  "board": "MacBook Air M2 (J413)",
   "compatible": "apple,j413",
+  "proxy_iodev": 4,
+  "proxy_port": "ATC0, the left rear USB-C port next to MagSafe",
   "options": {
     "CONFIG_ARCH_APPLE": null,
     "CONFIG_TYPEC": "typec",

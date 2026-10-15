@@ -18,8 +18,10 @@ def check_port(proxy):
     actual = int(proxy.iodev_whoami())
     print(f"Proxy transport: iodev {actual}", flush=True)
     if expected and actual != int(expected):
-        raise ValueError(f"Proxy is on iodev {actual}; this DP profile requires iodev {expected}. "
-                         "No guest started. Switch the Mac end to the other USB-C port.")
+        port = os.environ.get("ASAHI_HV_EXPECT_PORT")
+        raise ValueError(f"Proxy is on iodev {actual}; this bundle's driver profile requires iodev {expected}"
+                         + (f" ({port})" if port else "") + ". No guest started. "
+                         "Move the cable's Mac end to that port.")
 
 
 def run_guest(script, arguments):

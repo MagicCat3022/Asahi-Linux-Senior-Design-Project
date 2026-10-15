@@ -710,5 +710,83 @@ class Evidence(unittest.TestCase):
                 self.collect(root, state, run)
 
 
+class Profiles(unittest.TestCase):
+    def test_profiles_come_from_files_and_carry_their_proxy_port(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            host.save(root / "profiles/a-dp.json", {"name": "a-dp", "compatible": "apple,j413", "proxy_iodev": 4})
+            host.save(root / "profiles/b-dp.json", {"name": "b-dp", "compatible": "apple,j274"})
+            host.save(root / "state/target.json", {"compatible": "apple,j413"})
+            with patch.object(host, "PROFILES", root / "profiles"), patch.object(host, "STATE", root / "state"):
+                self.assertEqual(host.profile_names(), ["a-dp", "b-dp"])
+                self.assertEqual(host.profiles_for("apple,j413"), ["a-dp"])
+                with self.assertRaisesRegex(ValueError, "b-dp is for apple,j274, but this Mac is apple,j413"):
+                    host.driver_profile("b-dp")
+                with self.assertRaisesRegex(ValueError, "available: a-dp, b-dp"):
+                    host.driver_profile("missing")
+                saved = {"provenance": {"driver_profile": {"name": "a-dp", "proxy_iodev": 5}}}
+                self.assertEqual(host.expected_proxy_iodev(saved), 5)
+                # Bundles staged before profiles recorded a port fall back to the profile file.
+                self.assertEqual(host.expected_proxy_iodev({"provenance": {"driver_profile": {"name": "a-dp"}}}), 4)
+                self.assertIsNone(host.expected_proxy_iodev({"provenance": {}}))
+
+    def test_shipped_profiles_are_complete(self):
+        for name in host.profile_names():
+            profile = host.load(host.PROFILES / (name + ".json"))
+            self.assertEqual(profile["name"], name)
+            for key in ("description", "board", "compatible", "options", "bindings", "pd_address"):
+                self.assertIn(key, profile, name)
+            self.assertEqual("proxy_iodev" in profile, "proxy_port" in profile, name)
+
+
+class Status(unittest.TestCase):
+    def next_steps(self, root, windows=None):
+        with patch.object(host, "ROOT", root), patch.object(host, "STATE", root / ".asahi"), \
+             patch.object(host, "CONFIG", root / "asahi.local.json"), \
+             patch.object(host, "tmux_windows", lambda name: windows):
+            return host.gather_status()["next"]
+
+    def test_next_step_follows_the_workflow(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            state = root / ".asahi"
+            self.assertIn("init --target", self.next_steps(root))
+            host.save(root / "asahi.local.json", {"target": "alice@192.0.2.5", "bundle": ".asahi/bundles/base"})
+            self.assertIn("discover", self.next_steps(root))
+            host.save(state / "target.json", {"compatible": "apple,j413", "release": "7.1"})
+            self.assertIn("capture", self.next_steps(root))
+            host.save(state / "bundles/base/manifest.json", {"release": "7.1", "origin": "installed-running-kernel"})
+            host.save(state / "latest-build.json", {"release": "7.1-sdp", "driver_profile": {"name": "j413-usbc-dp"}})
+            self.assertIn("stage --profile j413-usbc-dp", self.next_steps(root))
+            host.save(state / "bundles/new/manifest.json", {"release": "7.1-sdp", "origin": "native-development-build"})
+            self.assertIn("session start", self.next_steps(root))
+            run = state / "runs/20261014T010000000000Z"
+            host.save(state / "latest-run.json", {"directory": str(run)})
+            host.save(run / "boot.json", {"release": "7.1-sdp", "state": "started"})
+            self.assertIn("check --wait", self.next_steps(root, {"serial": True, "hv": True}))
+            host.save(run / "check.json", {"passed": True, "mode": "hv"})
+            self.assertIn("poweroff", self.next_steps(root, {"serial": True, "hv": True}))
+            host.save(run / "boot.json", {"release": "7.1-sdp", "state": "exited"})
+            self.assertIn("kill-session", self.next_steps(root, {"serial": True, "hv": False}))
+            self.assertIn("recording-an-experiment", self.next_steps(root))
+            (root / "docs/experiments/2026-10-14-x/evidence" / run.name).mkdir(parents=True)
+            self.assertIn("session start", self.next_steps(root))
+
+
+class CommandLine(unittest.TestCase):
+    def test_every_command_is_grouped_documented_and_has_examples(self):
+        grouped = [name for _, names in host.GROUPS for name in names]
+        self.assertEqual(sorted(grouped), sorted(host.COMMANDS))
+        self.assertEqual(len(grouped), len(set(grouped)))
+        parser = host.build_parser()
+        commands = next(action for action in parser._actions if isinstance(action, argparse._SubParsersAction))
+        self.assertEqual(sorted(commands.choices), sorted(host.COMMANDS))
+        for name, sub in commands.choices.items():
+            self.assertIn("./tools/asahi " + name, sub.epilog)
+            for action in sub._actions:
+                if action.dest != "help":
+                    self.assertTrue(action.help, f"{name} {action.dest} has no help text")
+
+
 if __name__ == "__main__":
     unittest.main()

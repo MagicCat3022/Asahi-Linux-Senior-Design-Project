@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""WSL host tools for native Asahi kernel development and tethered HV testing."""
+"""Build Asahi kernels on the test Mac and boot them under the m1n1 hypervisor from this PC."""
 import argparse
 import datetime as dt
 import fcntl
@@ -21,6 +21,7 @@ import sys
 import tarfile
 import tempfile
 import termios
+import textwrap
 import time
 import tty
 
@@ -28,6 +29,14 @@ ROOT = Path(__file__).resolve().parent.parent
 STATE = ROOT / ".asahi"
 CONFIG = ROOT / "asahi.local.json"
 REMOTE = ROOT / "tools/asahi-remote.py"
+PROFILES = ROOT / "tools/profiles"
+GUIDES = "docs/guides/"
+# Values `init` writes to asahi.local.json; see docs/reference/asahi-tool.md.
+DEFAULTS = {"identity": "~/.ssh/asahi_hv", "m1n1_dir": "~/projects/m1n1",
+            "build_source": "~/linux-fairydust", "make_args": ["LLVM=1"],
+            "proxy": "/dev/m1n1", "console": "/dev/m1n1-sec", "session": "asahi-hv",
+            "bundle": "hv-bundle", "private_evidence_dir": "~/Github/asahi-sdp-evidence",
+            "private_evidence_url": "https://github.com/MagicCat3022/asahi-sdp-evidence"}
 
 
 def fail(message):
@@ -65,11 +74,36 @@ def local_path(value):
     return path.resolve() if path.is_absolute() else (ROOT / path).resolve()
 
 
+def in_wsl():
+    return "microsoft" in os.uname().release.lower()
+
+
+def profile_names():
+    return sorted(path.stem for path in PROFILES.glob("*.json"))
+
+
 def driver_profile(name):
-    profile = load(ROOT / "tools/profiles" / (name + ".json"))
-    if load(STATE / "target.json")["compatible"] != profile["compatible"]:
-        fail("Driver profile does not match this Mac")
+    if name not in profile_names():
+        fail(f"No driver profile {name!r}; available: {', '.join(profile_names()) or 'none'}")
+    profile = load(PROFILES / (name + ".json"))
+    compatible = load(STATE / "target.json")["compatible"]
+    if compatible != profile["compatible"]:
+        fail(f"Driver profile {name} is for {profile['compatible']}, but this Mac is {compatible}")
     return profile
+
+
+def profiles_for(compatible):
+    return [name for name in profile_names() if load(PROFILES / (name + ".json"))["compatible"] == compatible]
+
+
+def expected_proxy_iodev(manifest):
+    """Port the proxy cable must use for this bundle's driver profile, if any."""
+    saved = manifest.get("provenance", {}).get("driver_profile") or {}
+    if "proxy_iodev" in saved:
+        return saved["proxy_iodev"]
+    # Bundles staged before profiles recorded their port carry only the name.
+    path = PROFILES / (str(saved.get("name")) + ".json")
+    return load(path).get("proxy_iodev") if saved.get("name") and path.is_file() else None
 
 
 def ssh_command(cfg, *, interactive=False):
@@ -366,8 +400,7 @@ def boot(cfg, args):
     heap_mib = int(cfg.get("hv_heap_mib", 512))
     if not 128 <= heap_mib <= 2048:
         fail("hv_heap_mib must be between 128 and 2048")
-    expected_iodev = (4 if manifest.get("provenance", {}).get("driver_profile", {}).get("name") == "j413-usbc-dp"
-                      else None)
+    expected_iodev = expected_proxy_iodev(manifest)
     command = uv_command(cfg) + ["python", str(ROOT / "tools/asahi-hv-launch.py"),
         str(m1n1 / "proxyclient/tools/run_guest_kernel.sh"),
         "-e", target["efi_partuuid"], "-k", str(bundle / "arch/arm64/boot/Image"),
@@ -408,6 +441,7 @@ def boot(cfg, args):
         env["ASAHI_HV_HEAP_MIB"] = str(heap_mib)
         if expected_iodev is not None:
             env["ASAHI_HV_EXPECT_IODEV"] = str(expected_iodev)
+            env["ASAHI_HV_EXPECT_PORT"] = manifest["provenance"]["driver_profile"].get("proxy_port", "")
         result = relay(command, run_dir / "hv.log", env)
         record.update(state="exited", exit_code=result)
         save(run_dir / "boot.json", record)
@@ -418,7 +452,7 @@ def boot(cfg, args):
 def doctor(cfg, args):
     ok = True
     print("Host:", os.uname().nodename, "HOME=" + str(Path.home()), "project=" + str(ROOT))
-    for program in ("ssh", "uv", "tmux", "powershell.exe"):
+    for program in ("ssh", "uv", "tmux") + (("powershell.exe",) if in_wsl() else ()):
         found = shutil.which(program)
         print(program + ":", found or "MISSING")
         ok &= bool(found)
@@ -448,7 +482,8 @@ def doctor(cfg, args):
         print(json.dumps(target, indent=2))
         ok &= target["sudo"] and target["ssh_enabled"] == "enabled"
     if not ok:
-        fail("Some checks failed; see docs/guides/kernel-workflow.md")
+        fail("Some checks failed; see " + GUIDES + "set-up-the-controller-pc.md and "
+             "docs/reference/asahi-tool.md#troubleshooting")
 
 
 def session(cfg, args):
@@ -510,6 +545,136 @@ def check(cfg, args):
     (run_dir / "guest-health.log").write_bytes(report.stdout)
     print("PASS:", target["release"], target["root_source"], "SSH active")
     print("Kernel errors and failed services (review separately):", run_dir / "guest-health.log")
+
+
+def tmux_windows(name):
+    """Window name -> alive, or None when the session doesn't exist."""
+    try:
+        result = subprocess.run(["tmux", "list-windows", "-t", name, "-F", "#{window_name} #{pane_dead}"],
+                                capture_output=True, text=True)
+    except FileNotFoundError:
+        return None
+    if result.returncode:
+        return None
+    return {line.split()[0]: line.split()[1] == "0" for line in result.stdout.splitlines() if line.strip()}
+
+
+def proxy_busy():
+    lock_path = STATE / "locks/proxy"
+    if not lock_path.exists():
+        return False
+    with lock_path.open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        fcntl.flock(lock, fcntl.LOCK_UN)
+    return False
+
+
+def recorded_in(run_name):
+    return sorted(str(path.parent.relative_to(ROOT))
+                  for path in (ROOT / "docs/experiments").glob("*/evidence/" + run_name))
+
+
+def gather_status():
+    """Read local state only: no SSH, no checksums, no device access."""
+    result = {"configured": CONFIG.exists()}
+    if not CONFIG.exists():
+        result["next"] = "./tools/asahi init --target USER@MAC_IP"
+        return result
+    cfg = load(CONFIG)
+    result["config"] = {key: cfg.get(key) for key in ("target", "build_source", "m1n1_dir", "usb_busid")}
+    target = load(STATE / "target.json") if (STATE / "target.json").exists() else None
+    if target:
+        result["mac"] = {"compatible": target.get("compatible"), "installed_release": target.get("release"),
+                         "profiles": profiles_for(target.get("compatible"))}
+    bundle = local_path(cfg.get("bundle", DEFAULTS["bundle"]))
+    if (bundle / "manifest.json").is_file():
+        manifest = load(bundle / "manifest.json")
+        profile = (manifest.get("provenance", {}).get("driver_profile") or {}).get("name")
+        result["bundle"] = {"path": str(bundle.relative_to(ROOT)) if bundle.is_relative_to(ROOT) else str(bundle),
+                            "release": manifest["release"], "origin": manifest["origin"], "profile": profile,
+                            "proxy_iodev": expected_proxy_iodev(manifest)}
+    staged = {load(path)["release"] for path in (STATE / "bundles").glob("*/manifest.json")}
+    if (STATE / "latest-build.json").exists():
+        build = load(STATE / "latest-build.json")
+        result["build"] = {"release": build.get("release"), "source": build.get("source"),
+                           "commit": build.get("commit"), "profile": (build.get("driver_profile") or {}).get("name"),
+                           "staged": build.get("release") in staged}
+    name = cfg.get("session", DEFAULTS["session"])
+    windows = tmux_windows(name)
+    result["session"] = {"name": name, "running": windows is not None, "windows": windows or {},
+                         "proxy_busy": proxy_busy()}
+    result["devices"] = {path: os.path.exists(path) for path in (cfg.get("proxy", DEFAULTS["proxy"]),
+                                                                  cfg.get("console", DEFAULTS["console"]))}
+    if (STATE / "latest-run.json").exists():
+        run = Path(load(STATE / "latest-run.json")["directory"])
+        boot_record = load(run / "boot.json") if (run / "boot.json").exists() else {}
+        check_record = load(run / "check.json") if (run / "check.json").exists() else {}
+        result["run"] = {"id": run.name, "release": boot_record.get("release"), "state": boot_record.get("state"),
+                         "check": (("PASS " + check_record.get("mode", "")) if check_record.get("passed") else None),
+                         "recorded_in": recorded_in(run.name)}
+    result["next"] = next_step(result)
+    return result
+
+
+def next_step(status):
+    run, session = status.get("run", {}), status["session"]
+    if "mac" not in status:
+        return "Boot the Mac normally, then: ./tools/asahi discover"
+    if "bundle" not in status:
+        return "Boot the Mac normally, then: ./tools/asahi capture"
+    if status.get("build") and not status["build"]["staged"]:
+        profile = status["build"]["profile"]
+        return "Mac booted normally: ./tools/asahi stage" + (" --profile " + profile if profile else "")
+    if session["running"]:
+        if run.get("state") == "exited":
+            return (f"The HV controller has exited. Close the session (tmux kill-session -t {session['name']}), "
+                    "then start the next run")
+        if run.get("state") == "started" and not run.get("check"):
+            return "Guest booting or running: ./tools/asahi check --wait 180"
+        if run.get("state") == "started":
+            return ("Run in progress: use hv, logs, and ssh. When done: ./tools/asahi ssh -- sudo -n systemctl poweroff, "
+                    "then check ./tools/asahi logs")
+        return "Session waiting for the Mac: boot the m1n1 proxy entry, or ./tools/asahi session attach"
+    if run.get("check") and not run.get("recorded_in"):
+        return f"Run {run['id']} is not in any experiment report: see {GUIDES}recording-an-experiment.md"
+    return "./tools/asahi session start --wait 600, then boot the Mac into its m1n1 proxy entry"
+
+
+def print_status(status):
+    rows = []
+    if not status["configured"]:
+        rows.append(("Config", "missing (asahi.local.json)"))
+    else:
+        c = status["config"]
+        rows.append(("Config", f"target {c['target']}, build source {c['build_source']}"))
+        mac = status.get("mac")
+        rows.append(("Mac", f"{mac['compatible']}, installed {mac['installed_release']}, profiles: "
+                     f"{', '.join(mac['profiles']) or 'none'}" if mac else "not discovered yet"))
+        bundle = status.get("bundle")
+        rows.append(("Bundle", f"{bundle['release']} ({bundle['origin']}"
+                     + (f", profile {bundle['profile']}, proxy must be on iodev {bundle['proxy_iodev']}"
+                        if bundle.get("profile") else "") + f")  {bundle['path']}" if bundle else "none selected"))
+        build = status.get("build")
+        if build:
+            rows.append(("Last build", f"{build['release']} from {build['source']} "
+                         + ("(staged)" if build["staged"] else "(NOT staged)")))
+        session = status["session"]
+        windows = ", ".join(f"{w} {'alive' if alive else 'exited'}" for w, alive in session["windows"].items())
+        rows.append(("Session", f"{session['name']} running: {windows}" if session["running"]
+                     else f"{session['name']} not running"))
+        rows.append(("Devices", ", ".join(f"{path} {'present' if present else 'absent'}"
+                                          for path, present in status["devices"].items())))
+        run = status.get("run")
+        if run:
+            recorded = ", ".join(run["recorded_in"]) or "not recorded"
+            rows.append(("Last run", f"{run['id']}: {run['release'] or 'no boot record'}, state {run['state']}, "
+                         f"check {run['check'] or 'none'}, {recorded}"))
+    rows.append(("Next", status["next"]))
+    for label, value in rows:
+        print(f"{label:<11} {value}")
 
 
 EVIDENCE_LIMIT = 1024 * 1024
@@ -642,88 +807,198 @@ def evidence(cfg, args):
               "&& git -C", shlex.quote(str(root)), "push")
     print("Identifiers known to the workflow were replaced. Read the files before committing them.")
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    sub = parser.add_subparsers(dest="operation", required=True)
-    p = sub.add_parser("init", help="Create ignored machine configuration")
-    p.add_argument("--target", required=True)
-    p.add_argument("--identity", default="~/.ssh/asahi_hv")
-    p.add_argument("--m1n1-dir", default="~/projects/m1n1")
-    p.add_argument("--source", default="~/linux-fairydust")
-    p.add_argument("--busid", help="Known Windows m1n1 USB bus ID")
-    p = sub.add_parser("authorize", help="Create a dedicated key and install it interactively")
-    p = sub.add_parser("setup-host", help="Install WSL packages and udev rules")
-    p = sub.add_parser("doctor", help="Check tools, paths, bundle, and optionally SSH")
-    p.add_argument("--online", action="store_true")
-    sub.add_parser("discover", help="Record the Mac's root, EFI, and boot arguments over SSH")
-    sub.add_parser("capture", help="Fetch a verified baseline bundle from the running Mac")
-    p = sub.add_parser("adopt", help="Register transferred artifacts against saved SSH checksums")
-    p.add_argument("path")
-    sub.add_parser("bundles", help="List preserved baseline and development bundles")
-    p = sub.add_parser("use", help="Select an existing verified bundle without booting it")
-    p.add_argument("path")
-    p = sub.add_parser("build", help="Build a uniquely named test kernel natively on the Mac")
-    p.add_argument("--source")
-    p.add_argument("--output")
-    p.add_argument("--jobs", type=int, default=4)
-    p.add_argument("--localversion")
-    p.add_argument("--make-arg", action="append", default=[])
-    p.add_argument("--profile", choices=["j413-usbc-dp"], help="Require USB-C/DP configuration and preserve it for staging")
-    p.add_argument("--dry-run", action="store_true")
-    p = sub.add_parser("stage", help="Install new-release modules, generate initramfs, and fetch bundle")
-    p.add_argument("--profile", choices=["j413-usbc-dp"], help="Validate and include experiment drivers in the initramfs")
-    p = sub.add_parser("driver-check", help="Verify USB-C/DP modules and optionally live device bindings")
-    p.add_argument("--bundle")
-    p.add_argument("--live", action="store_true", help="Require matching running kernel and ready front-port DP devices")
-    sub.add_parser("proxy", help="Open the interactive m1n1 proxy shell (target must be in proxy mode)")
-    p = sub.add_parser("ssh", help="SSH to the Mac; arguments after -- form a remote command")
-    p.add_argument("command", nargs=argparse.REMAINDER)
-    p = sub.add_parser("usb", help="Manage Windows USB forwarding")
-    p.add_argument("action", choices=["list", "bind", "attach", "detach"])
-    p.add_argument("--busid")
-    p.add_argument("--once", action="store_true")
-    p = sub.add_parser("console", help="Reconnectable serial console with a raw log")
-    p.add_argument("--run-dir")
-    p = sub.add_parser("boot", help="Boot the selected bundle under m1n1 HV")
-    p.add_argument("--bundle")
-    p.add_argument("--run-dir")
-    p.add_argument("--wait", type=float, default=0)
+# Commands in the order of the workflow; `asahi --help` prints them by group.
+GROUPS = [
+    ("Anytime", ["status", "doctor", "ssh", "logs", "bundles"]),
+    ("One-time setup", ["init", "setup-host", "authorize", "discover", "capture", "usb", "adopt"]),
+    ("Build a kernel (Mac booted normally)", ["build", "stage", "driver-check", "use"]),
+    ("Test under the hypervisor (Mac in m1n1 proxy mode)", ["session", "check", "hv", "boot", "console", "proxy"]),
+    ("Record results", ["evidence"]),
+]
+COMMANDS = {
+    "status": ("Show where things stand and what to do next",
+               "Reads local state only (no SSH, no USB), so it is safe to run at any time, even during a run.",
+               ["status", "status --json"]),
+    "doctor": ("Check host tools, m1n1, and the selected bundle; --online also checks the Mac",
+               "Verifies bundle checksums, so it takes a few seconds. --online needs the Mac booted and on the LAN.",
+               ["doctor", "doctor --online"]),
+    "ssh": ("Open a shell on the Mac, or run one command there",
+            "Uses the SSH key and target from asahi.local.json. Put the remote command after --.",
+            ["ssh", "ssh -- uname -r", "ssh -- sudo -n dmesg --level=err"]),
+    "logs": ("Print the end of the latest run's serial, HV, and health logs", None,
+             ["logs", "logs --run-dir .asahi/runs/RUN_ID"]),
+    "bundles": ("List the boot bundles on this PC; * marks the selected one",
+                "A bundle is a kernel, device tree, initramfs, and checksums, fetched from the Mac.", ["bundles"]),
+    "init": ("Create asahi.local.json, the ignored per-machine config",
+             "Run once. Afterwards, edit asahi.local.json instead of running init again.",
+             ["init --target YOUR_USERNAME@MAC_IP", "init --target YOUR_USERNAME@MAC_IP --m1n1-dir ~/src/m1n1"]),
+    "setup-host": ("Install the PC's packages, ARM64 cross tools, and m1n1 udev rules (Ubuntu/Debian, uses sudo)",
+                   "Adds you to the dialout group if needed; log out and back in afterwards.", ["setup-host"]),
+    "authorize": ("Create a dedicated SSH key and copy its public half to the Mac",
+                  "Asks for the Mac password once, in this terminal.", ["authorize"]),
+    "discover": ("Record the Mac's board, root filesystem, EFI partition, and boot arguments (Mac booted normally)",
+                 "Saves .asahi/target.json. Rerun it after reinstalling or repartitioning the Mac.", ["discover"]),
+    "capture": ("Fetch the Mac's installed kernel as a baseline bundle (Mac booted normally)",
+                "The baseline is what you compare candidates against and fall back to.", ["capture"]),
+    "usb": ("Forward the Mac's m1n1 USB device from Windows into WSL (WSL only)",
+            "attach keeps running and reattaches after the Mac resets; leave it open in its own terminal. "
+            "bind needs an administrator PowerShell once per Windows USB port.",
+            ["usb list", "usb bind --busid 3-6", "usb attach", "usb attach --once", "usb detach"]),
+    "adopt": ("Register bundle files copied by other means, checked against checksums saved by discover", None,
+              ["adopt hv-bundle"]),
+    "build": ("Build a kernel with a new, unique release name on the Mac",
+              "Runs olddefconfig, then Image, dtbs, and modules in the source tree on the Mac. "
+              "Logs and a build record go to .asahi/builds/. Quote ~ so this PC's shell doesn't expand it.",
+              ["build --source '~/kernel-usb' --dry-run", "build --source '~/kernel-usb' --jobs 8",
+               "build --source '~/kernel-usb' --profile j413-usbc-dp"]),
+    "stage": ("Install the last build's modules on the Mac, make its initramfs, and fetch it as a bundle",
+              "Touches only the new release's module folder; the Mac's normal boot files never change. "
+              "The fetched bundle becomes the selected one.",
+              ["stage", "stage --profile j413-usbc-dp"]),
+    "driver-check": ("Check that a bundle has the profile's display drivers; --live checks they bound on the Mac",
+                     "Uses the bundle's profile, or the profile for this Mac's board. Reports go to .asahi/driver-checks/.",
+                     ["driver-check", "driver-check --live", "driver-check --profile j413-usbc-dp"]),
+    "use": ("Select a different bundle for the next boot", None,
+            ["use .asahi/bundles/BUNDLE_DIRECTORY"]),
+    "session": ("Start or attach to the tmux session that records serial output and runs the hypervisor",
+                "start opens a serial window and an hv window, then waits for the Mac to enter m1n1 proxy mode. "
+                "Detach with Ctrl-b d; that leaves everything running.",
+                ["session start --wait 600", "session attach", "session start --bundle .asahi/bundles/BUNDLE_DIRECTORY"]),
+    "check": ("Confirm the Mac booted the bundle from this run and save its health log",
+              "PASS needs this run's marker on the kernel command line, the expected release, the original root "
+              "filesystem, matching modules, and SSH. --running checks a normal boot instead.",
+              ["check --wait 180", "check --running"]),
+    "hv": ("Send input to the hypervisor shell in the running session",
+           "interrupt stops the guest and opens the HV Python shell; resume continues it. "
+           "Wait for the shell prompt before sending a command.",
+           ["hv interrupt", "hv command bt", "hv resume", "hv show"]),
+    "boot": ("Boot the selected bundle under the hypervisor in this terminal",
+             "Usually run for you by session start. --dry-run prints the plan without touching the Mac.",
+             ["boot --dry-run", "boot --diagnostic"]),
+    "console": ("Record the Mac's serial console to a log, reconnecting after USB resets",
+                "Usually run for you by session start. Ctrl-] exits.", ["console"]),
+    "proxy": ("Open m1n1's interactive Python shell without booting a kernel",
+              "Ctrl-D exits. Only one program may use the proxy port at a time.", ["proxy"]),
+    "evidence": ("Copy a run's records into an experiment report, with identifiers redacted",
+                 "JSON records go to DESTINATION/RUN_ID in this public repository. Logs go to the private "
+                 "evidence repository. Read the output before committing it.",
+                 ["evidence docs/experiments/2026-10-21-hotplug/evidence",
+                  "evidence docs/experiments/2026-10-21-hotplug/evidence --run-dir .asahi/runs/RUN_ID"]),
+}
+
+
+def build_parser():
+    formatter = argparse.RawDescriptionHelpFormatter
+    width = max(map(len, COMMANDS)) + 2
+    listing = "\n\n".join(group + ":\n" + "\n".join(f"  {name:<{width}}{COMMANDS[name][0]}" for name in names)
+                          for group, names in GROUPS)
+    parser = argparse.ArgumentParser(
+        prog="./tools/asahi", usage="%(prog)s COMMAND [options]", formatter_class=formatter, description=__doc__,
+        epilog=listing + "\n\nRun ./tools/asahi COMMAND --help for its options and examples.\n"
+               "How it works: docs/overview.md. Every command: docs/reference/asahi-tool.md.")
+    sub = parser.add_subparsers(dest="operation", required=True, metavar="COMMAND", help=argparse.SUPPRESS)
+
+    def command(name):
+        summary, details, examples = COMMANDS[name]
+        return sub.add_parser(name, formatter_class=formatter,
+                              description=textwrap.fill(summary + ".", 79)
+                              + ("\n\n" + textwrap.fill(details, 79) if details else ""),
+                              epilog="examples:\n" + "\n".join("  ./tools/asahi " + line for line in examples))
+
+    profiles = profile_names()
+    p = command("status")
+    p.add_argument("--json", action="store_true", help="Print machine-readable JSON")
+    p = command("doctor")
+    p.add_argument("--online", action="store_true", help="Also check SSH, sudo, and sshd on the Mac")
+    p = command("ssh")
+    p.add_argument("command", nargs=argparse.REMAINDER, help="Remote command, after --")
+    p = command("logs")
+    p.add_argument("--run-dir", help="Run folder to show (default: latest run)")
+    command("bundles")
+    p = command("init")
+    p.add_argument("--target", required=True, help="The Mac's SSH login, USER@HOST")
+    p.add_argument("--identity", default=DEFAULTS["identity"], help="SSH key to create and use (default: %(default)s)")
+    p.add_argument("--m1n1-dir", default=DEFAULTS["m1n1_dir"], help="m1n1 checkout on this PC (default: %(default)s)")
+    p.add_argument("--source", default=DEFAULTS["build_source"],
+                   help="Default kernel source folder on the Mac (default: %(default)s)")
+    p.add_argument("--busid", help="Windows USB bus ID of the Mac's m1n1 device, from usbipd list")
+    command("setup-host")
+    command("authorize")
+    command("discover")
+    command("capture")
+    p = command("usb")
+    p.add_argument("action", choices=["list", "bind", "attach", "detach"], help="What to do")
+    p.add_argument("--busid", help="Windows USB bus ID (default: usb_busid from asahi.local.json)")
+    p.add_argument("--once", action="store_true", help="With attach: attach once instead of watching")
+    p = command("adopt")
+    p.add_argument("path", help="Folder holding the copied Image, System.map, initramfs.img, and DTBs")
+    p = command("build")
+    p.add_argument("--source", help="Kernel source folder on the Mac (default: build_source from asahi.local.json)")
+    p.add_argument("--output", help="Out-of-tree build folder on the Mac; it must already hold a .config")
+    p.add_argument("--jobs", type=int, default=4, help="Parallel make jobs on the Mac (default: %(default)s)")
+    p.add_argument("--localversion", help="Release suffix such as -sdp-usb01 (default: -sdp-TIMESTAMP); must be new")
+    p.add_argument("--make-arg", action="append", default=[], metavar="NAME=VALUE",
+                   help="Extra make assignment; repeatable (make_args in asahi.local.json applies first)")
+    p.add_argument("--profile", choices=profiles, help="Driver profile whose options must be enabled")
+    p.add_argument("--dry-run", action="store_true", help="Check source, config, and toolchain without compiling")
+    p = command("stage")
+    p.add_argument("--profile", choices=profiles, help="Driver profile whose modules go in the initramfs")
+    p = command("driver-check")
+    p.add_argument("--bundle", help="Bundle to check (default: the selected bundle)")
+    p.add_argument("--profile", choices=profiles, help="Profile to check against (default: the bundle's or the board's)")
+    p.add_argument("--live", action="store_true", help="Also require the running kernel to match and the devices to be bound")
+    p = command("use")
+    p.add_argument("path", help="Bundle folder, as listed by bundles")
+    p = command("session")
+    p.add_argument("action", choices=["start", "attach"], help="start a new session, or attach to the running one")
+    p.add_argument("--bundle", help="Bundle to boot (default: the selected bundle)")
+    p.add_argument("--wait", type=float, default=180,
+                   help="Seconds to wait for the Mac to reach proxy mode (default: %(default)s)")
+    p.add_argument("--diagnostic", action="store_true", help="Stop in the initramfs shell instead of booting fully")
+    p = command("check")
+    p.add_argument("--wait", type=float, default=0, help="Seconds to keep retrying while the Mac boots (default: %(default)s)")
+    p.add_argument("--run-dir", help="Run folder to check (default: latest run)")
+    p.add_argument("--running", action="store_true", help="Check a normal boot; never counts as an HV result")
+    p = command("hv")
+    p.add_argument("action", choices=["interrupt", "resume", "command", "show"], help="What to send")
+    p.add_argument("text", nargs="?", help="With command: one HV shell line, quoted")
+    p = command("boot")
+    p.add_argument("--bundle", help="Bundle to boot (default: the selected bundle)")
+    p.add_argument("--run-dir", help="Run folder for logs (default: a new one)")
+    p.add_argument("--wait", type=float, default=0, help="Seconds to wait for the proxy port (default: %(default)s)")
     p.add_argument("--require-console", action="store_true", help=argparse.SUPPRESS)
-    p.add_argument("--diagnostic", action="store_true")
-    p.add_argument("--dry-run", action="store_true")
-    p = sub.add_parser("session", help="Start or attach the durable tmux serial/HV session")
-    p.add_argument("action", choices=["start", "attach"])
-    p.add_argument("--bundle")
-    p.add_argument("--wait", type=float, default=180)
-    p.add_argument("--diagnostic", action="store_true")
-    p = sub.add_parser("hv", help="Control the existing tmux HV shell")
-    p.add_argument("action", choices=["interrupt", "resume", "command", "show"])
-    p.add_argument("text", nargs="?")
-    p = sub.add_parser("check", help="Verify the booted kernel/root/SSH and collect health logs")
-    p.add_argument("--wait", type=float, default=0)
-    p.add_argument("--run-dir")
-    p.add_argument("--running", action="store_true", help="Check normal Asahi without claiming an HV boot")
-    p = sub.add_parser("logs", help="Show the latest serial and HV log tails")
-    p.add_argument("--run-dir")
-    p = sub.add_parser("evidence", help="Copy a run's records into an experiment folder with identifiers redacted")
-    p.add_argument("destination", help="Experiment evidence folder, e.g. docs/experiments/DATE-SLUG/evidence")
-    p.add_argument("--run-dir", help="Run to copy (default: latest)")
-    p.add_argument("--driver-check", action="append", default=[],
-                   help="Driver-check report to include (default: same-kernel reports taken during the run)")
+    p.add_argument("--diagnostic", action="store_true", help="Stop in the initramfs shell instead of booting fully")
+    p.add_argument("--dry-run", action="store_true", help="Print the boot plan and exit")
+    p = command("console")
+    p.add_argument("--run-dir", help="Run folder for serial.log (default: latest run)")
+    command("proxy")
+    p = command("evidence")
+    p.add_argument("destination", help="The experiment's evidence folder, docs/experiments/DATE-SLUG/evidence")
+    p.add_argument("--run-dir", help="Run to copy (default: latest run)")
+    p.add_argument("--driver-check", action="append", default=[], metavar="REPORT",
+                   help="Driver-check report to include; repeatable (default: same-kernel reports taken during the run)")
     p.add_argument("--skip-logs", action="store_true",
                    help="Publish only structured records; leave .log files out of both repositories")
-    args = parser.parse_args()
+    return parser
+
+
+def main():
+    args = build_parser().parse_args()
     if args.operation == "init":
         if CONFIG.exists():
             fail("asahi.local.json already exists; edit it to change hosts or paths")
-        save(CONFIG, {"schema": 1, "target": args.target, "identity": args.identity,
-             "m1n1_dir": args.m1n1_dir, "build_source": args.source,
-             "make_args": ["LLVM=1"], "proxy": "/dev/m1n1", "console": "/dev/m1n1-sec",
-             "usb_busid": args.busid, "session": "asahi-hv", "bundle": "hv-bundle",
-             "private_evidence_dir": "~/Github/asahi-sdp-evidence",
-             "private_evidence_url": "https://github.com/MagicCat3022/asahi-sdp-evidence"})
+        save(CONFIG, {"schema": 1, **DEFAULTS, "target": args.target, "identity": args.identity,
+             "m1n1_dir": args.m1n1_dir, "build_source": args.source, "usb_busid": args.busid})
         config()
         print("Created", CONFIG)
+        print("Next: ./tools/asahi setup-host")
+        return
+    if args.operation == "status":
+        status = gather_status()
+        if args.json:
+            print(json.dumps(status, indent=2))
+        else:
+            print_status(status)
         return
     cfg = config()
     op = args.operation
@@ -802,10 +1077,18 @@ def main():
         bundle = local_path(args.bundle or cfg["bundle"])
         target = load(STATE / "target.json")
         manifest = validate_bundle(bundle, target)
-        profile = (manifest.get("provenance", {}).get("driver_profile")
-                   or load(ROOT / "tools/profiles/j413-usbc-dp.json"))
+        if args.profile:
+            profile = driver_profile(args.profile)
+        elif manifest.get("provenance", {}).get("driver_profile"):
+            profile = manifest["provenance"]["driver_profile"]
+        else:
+            matching = profiles_for(target["compatible"])
+            if len(matching) != 1:
+                fail(f"No single driver profile for {target['compatible']} (found: {', '.join(matching) or 'none'}). "
+                     "Pass --profile, or add one in tools/profiles/; see docs/reference/asahi-tool.md#driver-profiles")
+            profile = driver_profile(matching[0])
         if target["compatible"] != profile["compatible"]:
-            fail("USB-C/DP profile currently covers J413 only")
+            fail(f"Profile {profile['name']} is for {profile['compatible']}, but this Mac is {target['compatible']}")
         if not (bundle / ".config").is_file():
             fail("Driver audit needs a bundle with the full .config")
         options = dict(line.split("=", 1) for line in (bundle / ".config").read_text().splitlines()
@@ -817,12 +1100,14 @@ def main():
         print(json.dumps(result, indent=2))
         print("Driver report:", report)
         if not result["passed"]:
-            fail("USB-C/DP driver check failed; see the report")
+            fail("Driver check failed; see the report")
     elif op == "ssh":
         command = args.command[1:] if args.command[:1] == ["--"] else args.command
         result = subprocess.run(ssh_command(cfg, interactive=True) + ([shlex.join(command)] if command else []))
         sys.exit(result.returncode)
     elif op == "usb":
+        if not in_wsl():
+            fail("usb is only for WSL. On native Linux, the Mac's m1n1 device appears directly as /dev/m1n1.")
         script = subprocess.check_output(["wslpath", "-w", str(ROOT / "tools/windows/Asahi-Usb.ps1")], text=True).strip()
         command = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, "-Action", args.action]
         if args.busid or cfg.get("usb_busid"):

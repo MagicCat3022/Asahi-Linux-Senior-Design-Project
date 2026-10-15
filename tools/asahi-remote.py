@@ -206,7 +206,7 @@ def driver_check(settings):
 def build(settings):
     command, source, output = make_command(settings)
     if not (output / ".config").is_file():
-        raise ValueError("Build output needs an existing .config; see docs/guides/kernel-workflow.md")
+        raise ValueError("Build output needs an existing .config; see docs/guides/test-a-kernel.md")
     preflight(command, output)
     if settings.get("driver_profile"):
         profile_modules(settings["driver_profile"], config_options(output / ".config"))
