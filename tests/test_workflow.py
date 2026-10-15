@@ -634,6 +634,7 @@ class Evidence(unittest.TestCase):
             "systemd[1]: Hostname set to <macbox>.\n"
             "macbox login: \n")
         (run / "m1n1-linux.bin").write_bytes(b"\0binary")
+        (run / "proxy.log").write_text("")
         (state / "runs/20261014T020000000000Z").mkdir(parents=True)
         host.save(state / "driver-checks/20261014T013000000000Z.json", {"release": "7.1-sdp", "passed": True})
         host.save(state / "driver-checks/20261014T013100000000Z.json", {"release": "baseline", "passed": False})
@@ -644,19 +645,23 @@ class Evidence(unittest.TestCase):
                                 "arch/arm64/boot/dts/apple/t8112-j413.dtb": "j", "arch/arm64/boot/dts/apple/t8103-j274.dtb": "x"}})
         return state, run
 
-    def collect(self, root, state, run, **options):
-        args = SimpleNamespace(destination="evidence", run_dir=str(run), driver_check=[], **options)
+    def collect(self, root, state, run, cfg=None, skip_logs=False):
+        cfg = cfg or {"target": "alice@192.0.2.5", "private_evidence_dir": str(root / "private"),
+                      "private_evidence_url": "https://github.com/team/evidence/"}
+        args = SimpleNamespace(destination="docs/experiments/2026-10-14-test/evidence", run_dir=str(run),
+                               driver_check=[], skip_logs=skip_logs)
         with patch.object(host, "ROOT", root), patch.object(host, "STATE", state), \
              contextlib.redirect_stdout(io.StringIO()):
-            host.evidence({"target": "alice@192.0.2.5"}, args)
-        return root / "evidence" / run.name
+            host.evidence(cfg, args)
+        return (root / "docs/experiments/2026-10-14-test/evidence" / run.name,
+                root / "private/2026-10-14-test" / run.name)
 
     def test_redacts_machine_identifiers_but_keeps_correlation_and_hashes(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             state, run = self.fixture(root)
-            output = self.collect(root, state, run)
-            serial = (output / "serial.log").read_text()
+            output, private = self.collect(root, state, run)
+            serial = (private / "serial.log").read_text()
             for secret in ("FX0AB12CD3", "alice", "macbox", "975ed9cd", "fedcba98", "02:11:22", str(root)):
                 self.assertNotIn(secret, serial + (output / "boot.json").read_text())
             self.assertIn("serial number: <serial-number>", serial)
@@ -673,14 +678,28 @@ class Evidence(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             state, run = self.fixture(root)
-            output = self.collect(root, state, run)
+            output, private = self.collect(root, state, run)
             names = sorted(path.name for path in output.iterdir())
-            self.assertEqual(names, ["boot.json", "build.json", "driver-check-20261014T013000000000Z.json", "serial.log"])
+            self.assertEqual(names, ["boot.json", "build.json", "driver-check-20261014T013000000000Z.json", "logs.md"])
+            self.assertEqual(sorted(path.name for path in private.iterdir()), ["serial.log"])  # empty proxy.log skipped
+            self.assertIn("(https://github.com/team/evidence/blob/main/2026-10-14-test/20261014T010000000000Z/serial.log)",
+                          (output / "logs.md").read_text())
             build = json.loads((output / "build.json").read_text())
             self.assertEqual(build["module_count"], 2)
             self.assertEqual(sorted(build["artifact_sha256"]),
                              [".config", "arch/arm64/boot/Image", "arch/arm64/boot/dts/apple/t8112-j413.dtb"])
             self.assertEqual(build["source"], "~/kernel")
+
+    def test_logs_need_a_private_destination_or_explicit_skip(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            state, run = self.fixture(root)
+            with self.assertRaisesRegex(ValueError, "private_evidence_dir"):
+                self.collect(root, state, run, cfg={"target": "alice@192.0.2.5"})
+            output, private = self.collect(root, state, run, cfg={"target": "alice@192.0.2.5"}, skip_logs=True)
+            self.assertEqual(sorted(path.name for path in output.iterdir()),
+                             ["boot.json", "build.json", "driver-check-20261014T013000000000Z.json"])
+            self.assertFalse(private.exists())
 
     def test_evidence_is_written_once(self):
         with tempfile.TemporaryDirectory() as temporary:

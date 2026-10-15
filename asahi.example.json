@@ -11,5 +11,7 @@
   "console": "/dev/m1n1-sec",
   "usb_busid": null,
   "session": "asahi-hv",
-  "bundle": "hv-bundle"
+  "bundle": "hv-bundle",
+  "private_evidence_dir": "~/Github/asahi-sdp-evidence",
+  "private_evidence_url": "https://github.com/MagicCat3022/asahi-sdp-evidence"
 }

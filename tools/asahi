@@ -583,9 +583,21 @@ def evidence(cfg, args):
     run = local_path(args.run_dir) if args.run_dir else run_directory()
     if not run.is_dir():
         fail(f"No run directory {run}")
-    destination = local_path(args.destination) / run.name
-    if destination.exists():
-        fail(f"{destination} already exists; evidence is copied once per run")
+    experiment = local_path(args.destination)
+    destination = experiment / run.name
+    # Free-text logs can hold identifiers nobody knew to redact, so they go to
+    # the team's private evidence repository; this repository is public.
+    private = url = None
+    if not args.skip_logs:
+        if not cfg.get("private_evidence_dir") or not cfg.get("private_evidence_url"):
+            fail("Set private_evidence_dir and private_evidence_url in asahi.local.json "
+                 "(see docs/guides/recording-an-experiment.md), or pass --skip-logs")
+        slug = (experiment.parent if experiment.name == "evidence" else experiment).name
+        private = local_path(cfg["private_evidence_dir"]) / slug / run.name
+        url = cfg["private_evidence_url"].rstrip("/") + "/blob/main/" + slug + "/" + run.name + "/"
+    for path in (destination, private):
+        if path and path.exists():
+            fail(f"{path} already exists; evidence is copied once per run")
     record = next((load(run / name) for name in ("boot.json", "check.json") if (run / name).exists()), {})
     release = record.get("release")
     later = sorted(path.name for path in (STATE / "runs").iterdir() if path.name > run.name) if (STATE / "runs").is_dir() else []
@@ -597,22 +609,38 @@ def evidence(cfg, args):
         checks = [path for path in sorted((STATE / "driver-checks").glob("*.json"))
                   if run.name <= path.stem < end and load(path).get("release") == release]
     files = {path.name: path.read_bytes() for path in sorted(run.iterdir())
-             if path.is_file() and path.suffix in {".json", ".log"}}
+             if path.is_file() and path.suffix in {".json", ".log"} and path.stat().st_size}
     files.update({"driver-check-" + path.name: path.read_bytes() for path in checks})
     summary = build_summary(release) if release else None
     if summary:
         files["build.json"] = (json.dumps(summary, indent=2) + "\n").encode()
     texts = {name: data.decode("utf-8", "surrogateescape") for name, data in files.items()}
     redact = redactor(cfg, list(texts.values()))
-    destination.mkdir(parents=True)
+    links = []
     for name, text in texts.items():
+        log = name.endswith(".log")
+        if log and not private:
+            continue
+        directory = private if log else destination
+        directory.mkdir(parents=True, exist_ok=True)
         data = redact(text).encode("utf-8", "surrogateescape")
         if len(data) > EVIDENCE_LIMIT:
             name, data = name + ".gz", gzip.compress(data, mtime=0)
-        (destination / name).write_bytes(data)
-        print(f"{len(data):>9}  {destination / name}")
+        (directory / name).write_bytes(data)
+        print(f"{len(data):>9}  {directory / name}")
+        if log:
+            links.append(f"- [{name}]({url + name})")
+    if links:
+        destination.mkdir(parents=True, exist_ok=True)
+        (destination / "logs.md").write_text(
+            f"# Logs for run {run.name}\n\nThe full logs are in the team's private evidence repository:\n\n"
+            + "\n".join(links) + "\n")
+        print("Private log links:", destination / "logs.md")
+        root = local_path(cfg["private_evidence_dir"])
+        print("Publish the logs to the team: git -C", shlex.quote(str(root)), "add . && git -C",
+              shlex.quote(str(root)), "commit -m", shlex.quote(f"Add logs for {private.parent.name} run {run.name}"),
+              "&& git -C", shlex.quote(str(root)), "push")
     print("Identifiers known to the workflow were replaced. Read the files before committing them.")
-
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -682,6 +710,8 @@ def main():
     p.add_argument("--run-dir", help="Run to copy (default: latest)")
     p.add_argument("--driver-check", action="append", default=[],
                    help="Driver-check report to include (default: same-kernel reports taken during the run)")
+    p.add_argument("--skip-logs", action="store_true",
+                   help="Publish only structured records; leave .log files out of both repositories")
     args = parser.parse_args()
     if args.operation == "init":
         if CONFIG.exists():
@@ -689,7 +719,9 @@ def main():
         save(CONFIG, {"schema": 1, "target": args.target, "identity": args.identity,
              "m1n1_dir": args.m1n1_dir, "build_source": args.source,
              "make_args": ["LLVM=1"], "proxy": "/dev/m1n1", "console": "/dev/m1n1-sec",
-             "usb_busid": args.busid, "session": "asahi-hv", "bundle": "hv-bundle"})
+             "usb_busid": args.busid, "session": "asahi-hv", "bundle": "hv-bundle",
+             "private_evidence_dir": "~/Github/asahi-sdp-evidence",
+             "private_evidence_url": "https://github.com/MagicCat3022/asahi-sdp-evidence"})
         config()
         print("Created", CONFIG)
         return
