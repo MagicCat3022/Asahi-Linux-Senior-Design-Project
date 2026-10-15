@@ -58,6 +58,7 @@ git clone --single-branch --branch project \
   ~/Github/Asahi-Linux-Senior-Design-Project
 git clone --recursive https://github.com/AsahiLinux/m1n1.git ~/projects/m1n1
 git -C ~/projects/m1n1 checkout ce2b8a43cea4220b602af1005dc9dbfc59c9624e
+git -C ~/projects/m1n1 submodule update --init
 cd ~/Github/Asahi-Linux-Senior-Design-Project
 ```
 
