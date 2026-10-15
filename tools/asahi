@@ -1009,7 +1009,7 @@ def main():
             subprocess.run(["ssh-keygen", "-t", "ed25519", "-f", str(identity), "-N", "", "-C", "asahi-hv-wsl"], check=True)
         subprocess.run(["ssh-copy-id", "-i", str(identity) + ".pub", cfg["target"]], check=True)
     elif op == "setup-host":
-        for command in (["sudo", "apt", "update"], ["sudo", "apt", "install", "-y", "python3", "tmux", "usbutils", "udev", "gcc-aarch64-linux-gnu", "binutils-aarch64-linux-gnu"],
+        for command in (["sudo", "apt", "update"], ["sudo", "apt", "install", "-y", "python3", "git", "make", "curl", "tmux", "usbutils", "udev", "gcc-aarch64-linux-gnu", "binutils-aarch64-linux-gnu"],
                         ["sudo", "install", "-m", "644", str(local_path(cfg["m1n1_dir"]) / "udev/80-m1n1.rules"), "/etc/udev/rules.d/80-m1n1.rules"],
                         ["sudo", "systemctl", "start", "systemd-udevd.service"], ["sudo", "udevadm", "control", "--reload-rules"]):
             subprocess.run(command, check=True)
