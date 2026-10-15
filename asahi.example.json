@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "target": "YOUR_USERNAME@MAC_IP",
+  "identity": "~/.ssh/asahi_hv",
+  "m1n1_dir": "~/projects/m1n1",
+  "build_source": "~/linux-fairydust",
+  "make_args": ["LLVM=1"],
+  "proxy_env": {},
+  "hv_heap_mib": 512,
+  "proxy": "/dev/m1n1",
+  "console": "/dev/m1n1-sec",
+  "usb_busid": null,
+  "session": "asahi-hv",
+  "bundle": "hv-bundle"
+}

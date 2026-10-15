@@ -1,0 +1,745 @@
+#!/usr/bin/env python3
+"""WSL host tools for native Asahi kernel development and tethered HV testing."""
+import argparse
+import datetime as dt
+import fcntl
+import gzip
+import hashlib
+import json
+import lzma
+import os
+from pathlib import Path, PurePosixPath
+import pty
+import re
+import select
+import shlex
+import shutil
+import signal
+import stat
+import subprocess
+import sys
+import tarfile
+import tempfile
+import termios
+import time
+import tty
+
+ROOT = Path(__file__).resolve().parent.parent
+STATE = ROOT / ".asahi"
+CONFIG = ROOT / "asahi.local.json"
+REMOTE = ROOT / "tools/asahi-remote.py"
+
+
+def fail(message):
+    raise ValueError(message)
+
+
+def stamp():
+    return dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+
+
+def save(path, value):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp-" + str(os.getpid()))
+    temporary.write_text(json.dumps(value, indent=2) + "\n")
+    temporary.replace(path)
+
+
+def load(path):
+    return json.loads(Path(path).read_text())
+
+
+def config():
+    if not CONFIG.exists():
+        fail("Run ./tools/asahi init --target USER@MAC_IP first.")
+    value = load(CONFIG)
+    target = value.get("target", "")
+    if not re.fullmatch(r"[^\s@\-][^\s@]*@[^\s\-][^\s]*", target):
+        fail("target must be USER@HOST with no whitespace")
+    return value
+
+
+def local_path(value):
+    path = Path(value).expanduser()
+    return path.resolve() if path.is_absolute() else (ROOT / path).resolve()
+
+
+def driver_profile(name):
+    profile = load(ROOT / "tools/profiles" / (name + ".json"))
+    if load(STATE / "target.json")["compatible"] != profile["compatible"]:
+        fail("Driver profile does not match this Mac")
+    return profile
+
+
+def ssh_command(cfg, *, interactive=False):
+    command = ["ssh", "-o", "ConnectTimeout=8", "-o", "StrictHostKeyChecking=accept-new"]
+    identity = local_path(cfg["identity"])
+    if identity.is_file():
+        command += ["-i", str(identity), "-o", "IdentitiesOnly=yes"]
+    if not interactive:
+        command += ["-o", "BatchMode=yes"]
+    return command + [cfg["target"]]
+
+
+def remote(cfg, operation, settings=None, *, archive=None, log=None):
+    # Build/module manifests can exceed Linux's per-argument size limit. Send
+    # settings with the program on stdin, never through shell interpolation.
+    expression = shlex.join(["python3", "-", operation])
+    payload = ("import sys\nsys.argv.append(" + repr(json.dumps(settings or {})) + ")\n").encode() + REMOTE.read_bytes()
+    command = ssh_command(cfg) + [expression]
+    stdout = open(archive, "wb") if archive else subprocess.PIPE
+    stderr = open(log, "wb") if log else None
+    try:
+        result = subprocess.run(command, input=payload, stdout=stdout, stderr=stderr)
+    finally:
+        if archive:
+            stdout.close()
+        if log:
+            stderr.close()
+    if result.returncode:
+        if log:
+            print(Path(log).read_text(errors="replace")[-6000:], file=sys.stderr)
+        fail(f"Remote {operation} failed (exit {result.returncode})." +
+             (f" Log: {log}" if log else " Check SSH/key/sudo access."))
+    return None if archive else json.loads(result.stdout)
+
+
+def boot_arguments(target):
+    result = []
+    for token in shlex.split(target["cmdline"]):
+        name = token.split("=", 1)[0]
+        if name in {"BOOT_IMAGE", "quiet", "rhgb", "console", "earlycon", "nokaslr",
+                    "rd.break", "rd.shell", "asahi_sdp.run"}:
+            continue
+        if token not in result:
+            result.append(token)
+    if not any(x.startswith("root=") for x in result):
+        if not target.get("root_uuid"):
+            fail("Could not determine root filesystem UUID")
+        result.append("root=UUID=" + target["root_uuid"])
+    if target.get("root_fstype") == "btrfs" and not any(x.startswith("rootflags=") for x in result):
+        subvol = next((x for x in target["root_options"].split(",") if x.startswith("subvol=")), None)
+        if subvol:
+            result.append("rootflags=" + subvol)
+    return " ".join(result + ["earlycon", "console=tty0", "console=ttySAC0,1500000", "rootwait", "nokaslr"])
+
+
+def extract_archive(archive, destination):
+    seen = set()
+    with tarfile.open(archive) as bundle:
+        for entry in bundle:
+            path = PurePosixPath(entry.name)
+            if path.is_absolute() or ".." in path.parts or not path.parts or not entry.isfile():
+                fail("Unsafe archive entry: " + entry.name)
+            normalized = str(path)
+            if normalized in seen:
+                fail("Duplicate archive entry: " + entry.name)
+            seen.add(normalized)
+            output = destination / normalized
+            output.parent.mkdir(parents=True, exist_ok=True)
+            with bundle.extractfile(entry) as source, output.open("wb") as sink:
+                shutil.copyfileobj(source, sink)
+    return sorted(seen)
+
+
+def digest(path):
+    with Path(path).open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def normalize_image(path):
+    image = path.read_bytes()
+    if image.startswith(b"\x1f\x8b"):
+        image = gzip.decompress(image)
+    elif image.startswith(b"\xfd7zXZ\0"):
+        image = lzma.decompress(image)
+    if image[0x38:0x3c] != b"ARM\x64":
+        fail("Kernel is not a raw arm64 Image (or gzip/xz wrapped Image). Use native build artifacts.")
+    if image != path.read_bytes():
+        path.write_bytes(image)
+
+
+def validate_bundle(bundle, target=None):
+    if not (bundle / "manifest.json").is_file():
+        fail("No verified bundle manifest at " + str(bundle) + ". Run capture while the Mac is in normal Asahi.")
+    manifest = load(bundle / "manifest.json")
+    for name in ("arch/arm64/boot/Image", "System.map", "initramfs.img"):
+        if name not in manifest["sha256"]:
+            fail("Manifest missing " + name)
+    for name, expected in manifest["sha256"].items():
+        path = PurePosixPath(name)
+        if path.is_absolute() or ".." in path.parts:
+            fail("Unsafe manifest path")
+        if not (bundle / name).is_file() or digest(bundle / name) != expected:
+            fail("Bundle checksum mismatch: " + name)
+    if (bundle / "arch/arm64/boot/Image").read_bytes()[0x38:0x3c] != b"ARM\x64":
+        fail("Bundle kernel must be an uncompressed arm64 Image")
+    if (bundle / ".config").exists() and ".config" not in manifest["sha256"]:
+        fail("Bundle .config is not covered by its checksum manifest")
+    cfg = ((bundle / ".config").read_text().splitlines() if (bundle / ".config").exists()
+           else [key + "=" + value for key, value in manifest.get("kernel_config", {}).items()])
+    for option in ("CONFIG_ARM64_16K_PAGES=y", "CONFIG_BLK_DEV_INITRD=y", "CONFIG_SERIAL_SAMSUNG_CONSOLE=y"):
+        if option not in cfg:
+            fail("Kernel configuration needs " + option)
+    with (bundle / "initramfs.img").open("rb") as stream:
+        if stream.read(4) == b"\x28\xb5\x2f\xfd" and "CONFIG_RD_ZSTD=y" not in cfg:
+            fail("Zstandard initramfs requires CONFIG_RD_ZSTD=y")
+    if target:
+        board = target["compatible"].removeprefix("apple,")
+        candidates = list((bundle / "arch/arm64/boot/dts/apple").glob("*-" + board + ".dtb"))
+        if not candidates:
+            fail("Bundle has no device tree for " + target["compatible"])
+    if not manifest.get("modules_installed"):
+        fail("Matching target modules were not verified or staged")
+    return manifest
+
+
+def adopt_bundle(cfg, directory):
+    target = load(STATE / "target.json")
+    proof = target.get("artifact_sha256", {})
+    board = target["compatible"].removeprefix("apple,")
+    required = ["arch/arm64/boot/Image", "System.map", "initramfs.img"]
+    required += [name for name in proof if name.endswith("-" + board + ".dtb")]
+    if len(required) != 4 or not target.get("kernel_config"):
+        fail("No complete saved SSH verification. Run discover while normal Asahi is online.")
+    for name in required:
+        if name not in proof or not (directory / name).is_file() or digest(directory / name) != proof[name]:
+            fail("Transferred bundle differs from saved SSH verification: " + name)
+    files = required + [str(p.relative_to(directory)) for p in sorted((directory / "arch/arm64/boot/dts/apple").glob("*.dtb"))
+                        if str(p.relative_to(directory)) not in required]
+    if (directory / ".config").exists():
+        if ".config" not in proof or digest(directory / ".config") != proof[".config"]:
+            fail("Transferred .config differs from saved SSH verification")
+        files.append(".config")
+    output = STATE / "bundles" / (target["release"] + "-" + stamp())
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".incoming-", dir=output.parent) as temporary:
+        work = Path(temporary)
+        for name in files:
+            (work / name).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(directory / name, work / name)
+        manifest = {"schema": 1, "created": stamp(), "origin": "transferred-verified-over-ssh",
+                    "release": target["release"], "target": cfg["target"],
+                    "modules_installed": target["modules_present"],
+                    "kernel_config": target["kernel_config"],
+                    "configuration_source": target.get("configuration_source"),
+                    "sha256": {name: digest(work / name) for name in files},
+                    "provenance": target}
+        save(work / "manifest.json", manifest)
+        validate_bundle(work, target)
+        work.rename(output)
+    cfg["bundle"] = str(output.relative_to(ROOT))
+    save(CONFIG, cfg)
+    print("Verified and selected transferred bundle:", output)
+
+
+def receive_bundle(cfg, metadata, label):
+    directory = STATE / "bundles" / (metadata["release"] + "-" + stamp())
+    directory.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".incoming-", dir=directory.parent) as temporary:
+        work = Path(temporary)
+        remote(cfg, "export", metadata, archive=work / "bundle.tar")
+        contents = work / "contents"
+        contents.mkdir()
+        names = extract_archive(work / "bundle.tar", contents)
+        normalize_image(contents / "arch/arm64/boot/Image")
+        manifest = {"schema": 1, "created": stamp(), "origin": label,
+                    "release": metadata["release"], "target": cfg["target"],
+                    "modules_installed": metadata.get("modules_installed", metadata.get("modules_present", False)),
+                    "sha256": {name: digest(contents / name) for name in names},
+                    "provenance": {k: v for k, v in metadata.items() if k not in {"files"}}}
+        save(contents / "manifest.json", manifest)
+        validate_bundle(contents, load(STATE / "target.json"))
+        contents.rename(directory)
+    cfg["bundle"] = str(directory.relative_to(ROOT))
+    save(CONFIG, cfg)
+    print("Active bundle:", directory)
+    return directory
+
+
+def new_run():
+    directory = STATE / "runs" / stamp()
+    directory.mkdir(parents=True)
+    save(STATE / "latest-run.json", {"directory": str(directory)})
+    return directory
+
+
+def run_directory(value=None):
+    if value:
+        path = local_path(value)
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+    if (STATE / "latest-run.json").exists():
+        return Path(load(STATE / "latest-run.json")["directory"])
+    return new_run()
+
+
+def uv_command(cfg):
+    m1n1 = local_path(cfg["m1n1_dir"])
+    return ["uv", "run", "--no-project", "--python", "3.13", "--with-requirements",
+            str(m1n1 / "requirements.txt")]
+
+
+def proxy_environment(cfg):
+    env = os.environ.copy()
+    for name, value in cfg.get("proxy_env", {}).items():
+        if name not in {"USE_CLANG", "TOOLCHAIN", "LLDDIR", "ARCH"} or not isinstance(value, str):
+            fail("proxy_env supports string USE_CLANG, TOOLCHAIN, LLDDIR, and ARCH values")
+        env[name] = str(local_path(value)) + os.sep if name in {"TOOLCHAIN", "LLDDIR"} else value
+    return env
+
+
+def proxy_preflight(cfg):
+    # Proxy clients compile ARM64 stubs at runtime even if m1n1 is already built.
+    script = """import json, sys
+sys.path.insert(0, sys.argv[1])
+from m1n1.asm import ARMAsm
+a = ARMAsm('nop\\nret', 0x1000)
+assert a.data.hex() == '1f2003d5c0035fd6'
+print(json.dumps({name: getattr(a.toolchain, name) for name in ('CC', 'LD', 'OBJCOPY', 'NM')}))
+"""
+    result = subprocess.run(uv_command(cfg) + ["python", "-c", script,
+        str(local_path(cfg["m1n1_dir"]) / "proxyclient")], env=proxy_environment(cfg),
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    if result.returncode:
+        fail("Host ARM64 stub toolchain failed before target access. Run setup-host for GNU tools "
+             "or configure proxy_env for Clang/LLD.\n" + result.stderr[-3000:])
+    return json.loads(result.stdout)
+
+
+def relay(command, logfile, env):
+    """Keep the HV's Python shell on a PTY while preserving an exact output log."""
+    pid, master = pty.fork()
+    if pid == 0:
+        os.execvpe(command[0], command, env)
+    previous = termios.tcgetattr(sys.stdin.fileno()) if sys.stdin.isatty() else None
+    inputs = [master, sys.stdin.fileno()]
+    try:
+        if previous:
+            tty.setraw(sys.stdin.fileno())
+        with open(logfile, "ab", buffering=0) as log:
+            while True:
+                ready, _, _ = select.select(inputs, [], [])
+                if master in ready:
+                    try:
+                        data = os.read(master, 65536)
+                    except OSError:
+                        break
+                    if not data:
+                        break
+                    log.write(data)
+                    sys.stdout.buffer.write(data)
+                    sys.stdout.buffer.flush()
+                if sys.stdin.fileno() in ready:
+                    data = os.read(sys.stdin.fileno(), 4096)
+                    if data:
+                        os.write(master, data)
+                    else:
+                        inputs.remove(sys.stdin.fileno())
+    except BaseException:
+        try:
+            os.killpg(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        raise
+    finally:
+        os.close(master)
+        if previous:
+            termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, previous)
+    _, status = os.waitpid(pid, 0)
+    return os.waitstatus_to_exitcode(status)
+
+
+def boot(cfg, args):
+    bundle = local_path(args.bundle or cfg["bundle"])
+    target = load(STATE / "target.json")
+    manifest = validate_bundle(bundle, target)
+    m1n1 = local_path(cfg["m1n1_dir"])
+    if b"m1n1_initramfs" not in (m1n1 / "build/m1n1.bin").read_bytes():
+        fail("Build a current m1n1 with sized initramfs payload support")
+    run_dir = local_path(args.run_dir) if args.run_dir else STATE / "runs" / ("DRY-RUN" if args.dry_run else stamp())
+    commandline = cfg.get("bootargs") or boot_arguments(target)
+    if args.diagnostic:
+        commandline += " rd.shell rd.break=cmdline"
+    commandline += " asahi_sdp.run=" + run_dir.name
+    heap_mib = int(cfg.get("hv_heap_mib", 512))
+    if not 128 <= heap_mib <= 2048:
+        fail("hv_heap_mib must be between 128 and 2048")
+    expected_iodev = (4 if manifest.get("provenance", {}).get("driver_profile", {}).get("name") == "j413-usbc-dp"
+                      else None)
+    command = uv_command(cfg) + ["python", str(ROOT / "tools/asahi-hv-launch.py"),
+        str(m1n1 / "proxyclient/tools/run_guest_kernel.sh"),
+        "-e", target["efi_partuuid"], "-k", str(bundle / "arch/arm64/boot/Image"),
+        str(bundle), commandline, str(bundle / "initramfs.img")]
+    record = {"run": run_dir.name, "bundle": str(bundle), "release": manifest["release"],
+              "cmdline": commandline, "command": command, "created": stamp(), "state": "planned",
+              "m1n1_commit": subprocess.check_output(["git", "-C", str(m1n1), "rev-parse", "HEAD"], text=True).strip(),
+              "hv_heap_mib": heap_mib, "expected_iodev": expected_iodev}
+    if args.dry_run:
+        print(json.dumps(record, indent=2))
+        return
+    record["host_toolchain"] = proxy_preflight(cfg)
+    if not target.get("efi_partuuid"):
+        fail("Missing EFI partition UUID; run discover while Asahi is booted normally")
+    deadline = time.monotonic() + args.wait
+    while True:
+        device = Path(cfg["proxy"])
+        available = device.exists() and stat.S_ISCHR(device.stat().st_mode)
+        console_ready = not args.require_console or (run_dir / "serial.ready").exists()
+        if available and console_ready:
+            break
+        if time.monotonic() >= deadline:
+            fail("Proxy/console not ready. Attach USB, stop old picocom processes, and run doctor.")
+        time.sleep(0.5)
+    # Each workflow process takes the same lock before opening the primary port.
+    # It remains held throughout HV execution, including the interactive shell.
+    (STATE / "locks").mkdir(parents=True, exist_ok=True)
+    with (STATE / "locks/proxy").open("w") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            fail("Another workflow process owns the proxy/HV. Use hv commands on that session.")
+        run_dir.mkdir(parents=True, exist_ok=True)
+        save(STATE / "latest-run.json", {"directory": str(run_dir)})
+        record["state"] = "started"
+        save(run_dir / "boot.json", record)
+        env = {**proxy_environment(cfg), "M1N1DEVICE": cfg["proxy"], "TMPDIR": str(run_dir)}
+        env["ASAHI_HV_HEAP_MIB"] = str(heap_mib)
+        if expected_iodev is not None:
+            env["ASAHI_HV_EXPECT_IODEV"] = str(expected_iodev)
+        result = relay(command, run_dir / "hv.log", env)
+        record.update(state="exited", exit_code=result)
+        save(run_dir / "boot.json", record)
+        if result:
+            fail("HV exited with code " + str(result))
+
+
+def doctor(cfg, args):
+    ok = True
+    print("Host:", os.uname().nodename, "HOME=" + str(Path.home()), "project=" + str(ROOT))
+    for program in ("ssh", "uv", "tmux", "powershell.exe"):
+        found = shutil.which(program)
+        print(program + ":", found or "MISSING")
+        ok &= bool(found)
+    m1n1 = local_path(cfg["m1n1_dir"])
+    for path in (m1n1 / "build/m1n1.bin", m1n1 / "requirements.txt",
+                 m1n1 / "proxyclient/tools/run_guest_kernel.sh", local_path(cfg["identity"])):
+        print(str(path) + ":", "present" if path.is_file() else "MISSING")
+        ok &= path.is_file()
+    try:
+        print("Host ARM64 stub toolchain:", json.dumps(proxy_preflight(cfg)))
+    except ValueError as exc:
+        print(exc)
+        ok = False
+    for device in (cfg["proxy"], cfg["console"]):
+        print(device + ":", "accessible" if os.access(device, os.R_OK | os.W_OK) else "absent/inaccessible (expected in normal Asahi)")
+    if (STATE / "target.json").exists() and cfg.get("bundle"):
+        try:
+            manifest = validate_bundle(local_path(cfg["bundle"]), load(STATE / "target.json"))
+            print("Verified bundle:", manifest["release"])
+        except ValueError as exc:
+            print("Bundle:", exc)
+            ok = False
+    else:
+        print("Run discover and capture to prepare a boot bundle.")
+    if args.online:
+        target = remote(cfg, "discover")
+        print(json.dumps(target, indent=2))
+        ok &= target["sudo"] and target["ssh_enabled"] == "enabled"
+    if not ok:
+        fail("Some checks failed; see docs/KERNEL_WORKFLOW.md")
+
+
+def session(cfg, args):
+    name = cfg.get("session", "asahi-hv")
+    if args.action == "attach":
+        subprocess.run(["tmux", "attach-session", "-t", name], check=True)
+        return
+    if subprocess.run(["tmux", "has-session", "-t", name], capture_output=True).returncode == 0:
+        fail("Session already exists. Use session attach, hv, or logs.")
+    (STATE / "locks").mkdir(parents=True, exist_ok=True)
+    with (STATE / "locks/proxy").open("w") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            fail("A workflow proxy/HV controller is already running; operate it instead.")
+    run_dir = new_run()
+    base = [sys.executable, str(ROOT / "tools/asahi")]
+    console = shlex.join(base + ["console", "--run-dir", str(run_dir)])
+    launch = base + ["boot", "--run-dir", str(run_dir), "--wait", str(args.wait), "--require-console"]
+    if args.bundle:
+        launch += ["--bundle", args.bundle]
+    if args.diagnostic:
+        launch += ["--diagnostic"]
+    subprocess.run(["tmux", "new-session", "-d", "-s", name, "-n", "serial", console], check=True)
+    subprocess.run(["tmux", "set-option", "-t", name, "remain-on-exit", "on"], check=True)
+    subprocess.run(["tmux", "new-window", "-t", name, "-n", "hv", shlex.join(launch)], check=True)
+    subprocess.run(["tmux", "set-window-option", "-t", name + ":hv", "remain-on-exit", "on"], check=True)
+    print("Session:", name, "Run:", run_dir)
+    print("./tools/asahi session attach   # Ctrl-b then d detaches without stopping HV")
+
+
+def check(cfg, args):
+    run_dir = run_directory(args.run_dir)
+    record = None if args.running else load(run_dir / "boot.json")
+    deadline = time.monotonic() + args.wait
+    while True:
+        try:
+            target = remote(cfg, "discover")
+            if record:
+                marker = "asahi_sdp.run=" + record["run"]
+                if marker not in shlex.split(target["cmdline"]):
+                    fail("SSH reached an older/different boot, not this HV run")
+                if target["release"] != record["release"]:
+                    fail("Running kernel differs from the tested bundle")
+            if not target["modules_present"] or target["ssh_active"] != "active":
+                fail("Matching modules or SSH service missing")
+            expected = load(STATE / "target.json")
+            if target["root_uuid"] != expected["root_uuid"]:
+                fail("Running root filesystem differs from the configured Asahi root")
+            break
+        except ValueError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(2)
+    save(run_dir / "check.json", {"checked": stamp(), "mode": "normal" if args.running else "hv",
+                                  "passed": True, **target})
+    report = subprocess.run(ssh_command(cfg) + ["sudo -n dmesg --level=emerg,alert,crit,err; systemctl --failed --no-pager"],
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    (run_dir / "guest-health.log").write_bytes(report.stdout)
+    print("PASS:", target["release"], target["root_source"], "SSH active")
+    print("Kernel errors and failed services (review separately):", run_dir / "guest-health.log")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    sub = parser.add_subparsers(dest="operation", required=True)
+    p = sub.add_parser("init", help="Create ignored machine configuration")
+    p.add_argument("--target", required=True)
+    p.add_argument("--identity", default="~/.ssh/asahi_hv")
+    p.add_argument("--m1n1-dir", default="~/projects/m1n1")
+    p.add_argument("--source", default="~/linux-fairydust")
+    p.add_argument("--busid", help="Known Windows m1n1 USB bus ID")
+    p = sub.add_parser("authorize", help="Create a dedicated key and install it interactively")
+    p = sub.add_parser("setup-host", help="Install WSL packages and udev rules")
+    p = sub.add_parser("doctor", help="Check tools, paths, bundle, and optionally SSH")
+    p.add_argument("--online", action="store_true")
+    sub.add_parser("discover", help="Record the Mac's root, EFI, and boot arguments over SSH")
+    sub.add_parser("capture", help="Fetch a verified baseline bundle from the running Mac")
+    p = sub.add_parser("adopt", help="Register transferred artifacts against saved SSH checksums")
+    p.add_argument("path")
+    sub.add_parser("bundles", help="List preserved baseline and development bundles")
+    p = sub.add_parser("use", help="Select an existing verified bundle without booting it")
+    p.add_argument("path")
+    p = sub.add_parser("build", help="Build a uniquely named test kernel natively on the Mac")
+    p.add_argument("--source")
+    p.add_argument("--output")
+    p.add_argument("--jobs", type=int, default=4)
+    p.add_argument("--localversion")
+    p.add_argument("--make-arg", action="append", default=[])
+    p.add_argument("--profile", choices=["j413-usbc-dp"], help="Require USB-C/DP configuration and preserve it for staging")
+    p.add_argument("--dry-run", action="store_true")
+    p = sub.add_parser("stage", help="Install new-release modules, generate initramfs, and fetch bundle")
+    p.add_argument("--profile", choices=["j413-usbc-dp"], help="Validate and include experiment drivers in the initramfs")
+    p = sub.add_parser("driver-check", help="Verify USB-C/DP modules and optionally live device bindings")
+    p.add_argument("--bundle")
+    p.add_argument("--live", action="store_true", help="Require matching running kernel and ready front-port DP devices")
+    sub.add_parser("proxy", help="Open the interactive m1n1 proxy shell (target must be in proxy mode)")
+    p = sub.add_parser("ssh", help="SSH to the Mac; arguments after -- form a remote command")
+    p.add_argument("command", nargs=argparse.REMAINDER)
+    p = sub.add_parser("usb", help="Manage Windows USB forwarding")
+    p.add_argument("action", choices=["list", "bind", "attach", "detach"])
+    p.add_argument("--busid")
+    p.add_argument("--once", action="store_true")
+    p = sub.add_parser("console", help="Reconnectable serial console with a raw log")
+    p.add_argument("--run-dir")
+    p = sub.add_parser("boot", help="Boot the selected bundle under m1n1 HV")
+    p.add_argument("--bundle")
+    p.add_argument("--run-dir")
+    p.add_argument("--wait", type=float, default=0)
+    p.add_argument("--require-console", action="store_true", help=argparse.SUPPRESS)
+    p.add_argument("--diagnostic", action="store_true")
+    p.add_argument("--dry-run", action="store_true")
+    p = sub.add_parser("session", help="Start or attach the durable tmux serial/HV session")
+    p.add_argument("action", choices=["start", "attach"])
+    p.add_argument("--bundle")
+    p.add_argument("--wait", type=float, default=180)
+    p.add_argument("--diagnostic", action="store_true")
+    p = sub.add_parser("hv", help="Control the existing tmux HV shell")
+    p.add_argument("action", choices=["interrupt", "resume", "command", "show"])
+    p.add_argument("text", nargs="?")
+    p = sub.add_parser("check", help="Verify the booted kernel/root/SSH and collect health logs")
+    p.add_argument("--wait", type=float, default=0)
+    p.add_argument("--run-dir")
+    p.add_argument("--running", action="store_true", help="Check normal Asahi without claiming an HV boot")
+    p = sub.add_parser("logs", help="Show the latest serial and HV log tails")
+    p.add_argument("--run-dir")
+    args = parser.parse_args()
+    if args.operation == "init":
+        if CONFIG.exists():
+            fail("asahi.local.json already exists; edit it to change hosts or paths")
+        save(CONFIG, {"schema": 1, "target": args.target, "identity": args.identity,
+             "m1n1_dir": args.m1n1_dir, "build_source": args.source,
+             "make_args": ["LLVM=1"], "proxy": "/dev/m1n1", "console": "/dev/m1n1-sec",
+             "usb_busid": args.busid, "session": "asahi-hv", "bundle": "hv-bundle"})
+        config()
+        print("Created", CONFIG)
+        return
+    cfg = config()
+    op = args.operation
+    if op == "authorize":
+        identity = local_path(cfg["identity"])
+        identity.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if not identity.exists():
+            subprocess.run(["ssh-keygen", "-t", "ed25519", "-f", str(identity), "-N", "", "-C", "asahi-hv-wsl"], check=True)
+        subprocess.run(["ssh-copy-id", "-i", str(identity) + ".pub", cfg["target"]], check=True)
+    elif op == "setup-host":
+        for command in (["sudo", "apt", "update"], ["sudo", "apt", "install", "-y", "python3", "tmux", "usbutils", "udev", "gcc-aarch64-linux-gnu", "binutils-aarch64-linux-gnu"],
+                        ["sudo", "install", "-m", "644", str(local_path(cfg["m1n1_dir"]) / "udev/80-m1n1.rules"), "/etc/udev/rules.d/80-m1n1.rules"],
+                        ["sudo", "systemctl", "start", "systemd-udevd.service"], ["sudo", "udevadm", "control", "--reload-rules"]):
+            subprocess.run(command, check=True)
+        if "dialout" not in subprocess.check_output(["id", "-nG"], text=True).split():
+            subprocess.run(["sudo", "usermod", "-aG", "dialout", os.environ["USER"]], check=True)
+            print("Restart your login session to activate the dialout group.")
+    elif op == "doctor":
+        doctor(cfg, args)
+    elif op == "discover":
+        target = remote(cfg, "discover")
+        save(STATE / "target.json", target)
+        print(json.dumps(target, indent=2))
+        print("HV arguments:", boot_arguments(target))
+    elif op == "capture":
+        metadata = remote(cfg, "capture")
+        save(STATE / "target.json", metadata)
+        receive_bundle(cfg, metadata, "installed-running-kernel")
+    elif op == "adopt":
+        adopt_bundle(cfg, local_path(args.path))
+    elif op == "bundles":
+        for path in sorted((STATE / "bundles").glob("*/manifest.json")):
+            manifest = load(path)
+            active = "*" if path.parent == local_path(cfg["bundle"]) else " "
+            print(active, manifest["release"], manifest["origin"], str(path.parent.relative_to(ROOT)))
+    elif op == "use":
+        path = local_path(args.path)
+        manifest = validate_bundle(path, load(STATE / "target.json"))
+        cfg["bundle"] = str(path)
+        save(CONFIG, cfg)
+        print("Active bundle:", manifest["release"], path)
+    elif op == "build":
+        if args.jobs < 1:
+            fail("--jobs must be positive")
+        localversion = args.localversion or "-sdp-" + stamp().lower()
+        if not re.fullmatch(r"-[a-zA-Z0-9._+\-]+", localversion):
+            fail("--localversion must start with - and contain only release characters")
+        make_args = cfg.get("make_args", ["LLVM=1"]) + args.make_arg
+        if any(x.startswith("LOCALVERSION=") for x in make_args):
+            fail("Use --localversion instead of a LOCALVERSION make argument")
+        settings = {"source": args.source or cfg["build_source"], "output": args.output,
+                    "make_args": make_args + ["LOCALVERSION=" + localversion], "jobs": args.jobs}
+        if args.profile:
+            settings["driver_profile"] = driver_profile(args.profile)
+        if args.dry_run:
+            print(json.dumps(remote(cfg, "plan", settings), indent=2))
+            return
+        directory = STATE / "builds" / stamp()
+        directory.mkdir(parents=True)
+        print("Building on", cfg["target"], "Log:", directory / "build.log", flush=True)
+        result = remote(cfg, "build", settings, log=directory / "build.log")
+        save(directory / "build.json", result)
+        save(STATE / "latest-build.json", result)
+        print("Built:", result["release"], "Next: ./tools/asahi stage")
+    elif op == "stage":
+        settings = load(STATE / "latest-build.json")
+        if args.profile:
+            settings["driver_profile"] = driver_profile(args.profile)
+        log = STATE / "builds" / ("stage-" + stamp() + ".log")
+        log.parent.mkdir(parents=True, exist_ok=True)
+        print("Staging new modules and initramfs. Log:", log, flush=True)
+        metadata = remote(cfg, "stage", settings, log=log)
+        receive_bundle(cfg, metadata, "native-development-build")
+        remote(cfg, "cleanup", metadata)
+    elif op == "driver-check":
+        bundle = local_path(args.bundle or cfg["bundle"])
+        target = load(STATE / "target.json")
+        manifest = validate_bundle(bundle, target)
+        profile = (manifest.get("provenance", {}).get("driver_profile")
+                   or load(ROOT / "tools/profiles/j413-usbc-dp.json"))
+        if target["compatible"] != profile["compatible"]:
+            fail("USB-C/DP profile currently covers J413 only")
+        if not (bundle / ".config").is_file():
+            fail("Driver audit needs a bundle with the full .config")
+        options = dict(line.split("=", 1) for line in (bundle / ".config").read_text().splitlines()
+                       if line.startswith("CONFIG_") and "=" in line)
+        result = remote(cfg, "driver-check", {"release": manifest["release"],
+                        "profile": profile, "options": options, "live": args.live})
+        report = STATE / "driver-checks" / (stamp() + ".json")
+        save(report, result)
+        print(json.dumps(result, indent=2))
+        print("Driver report:", report)
+        if not result["passed"]:
+            fail("USB-C/DP driver check failed; see the report")
+    elif op == "ssh":
+        command = args.command[1:] if args.command[:1] == ["--"] else args.command
+        result = subprocess.run(ssh_command(cfg, interactive=True) + ([shlex.join(command)] if command else []))
+        sys.exit(result.returncode)
+    elif op == "usb":
+        script = subprocess.check_output(["wslpath", "-w", str(ROOT / "tools/windows/Asahi-Usb.ps1")], text=True).strip()
+        command = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, "-Action", args.action]
+        if args.busid or cfg.get("usb_busid"):
+            command += ["-BusId", args.busid or cfg["usb_busid"]]
+        if args.once:
+            command += ["-Once"]
+        subprocess.run(command, check=True)
+    elif op == "console":
+        directory = run_directory(args.run_dir)
+        command = uv_command(cfg) + ["python", str(ROOT / "tools/asahi-serial.py"), cfg["console"], str(directory)]
+        sys.exit(subprocess.call(command))
+    elif op == "proxy":
+        proxy_preflight(cfg)
+        if not os.access(cfg["proxy"], os.R_OK | os.W_OK):
+            fail("Proxy device absent/inaccessible. Attach the Mac's USB device to WSL first.")
+        (STATE / "locks").mkdir(parents=True, exist_ok=True)
+        with (STATE / "locks/proxy").open("w") as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                fail("Proxy/HV is already owned by a workflow process. Use hv commands.")
+            directory = new_run()
+            command = uv_command(cfg) + ["python", str(local_path(cfg["m1n1_dir"]) / "proxyclient/tools/shell.py")]
+            sys.exit(relay(command, directory / "proxy.log", {**proxy_environment(cfg), "M1N1DEVICE": cfg["proxy"]}))
+    elif op == "boot":
+        boot(cfg, args)
+    elif op == "session":
+        session(cfg, args)
+    elif op == "hv":
+        pane = cfg.get("session", "asahi-hv") + ":hv"
+        if args.action == "interrupt":
+            subprocess.run(["tmux", "send-keys", "-t", pane, "C-c"], check=True)
+        elif args.action in {"resume", "command"}:
+            text = "cont" if args.action == "resume" else args.text
+            if not text or "\n" in text or "\r" in text:
+                fail("Supply a single HV shell command")
+            subprocess.run(["tmux", "send-keys", "-t", pane, "-l", text], check=True)
+            subprocess.run(["tmux", "send-keys", "-t", pane, "Enter"], check=True)
+        else:
+            subprocess.run(["tmux", "capture-pane", "-p", "-t", pane, "-S", "-80"], check=True)
+    elif op == "check":
+        check(cfg, args)
+    elif op == "logs":
+        directory = run_directory(args.run_dir)
+        print("Run:", directory)
+        for name in ("serial.log", "hv.log", "proxy.log", "guest-health.log"):
+            path = directory / name
+            if path.exists():
+                print("\n" + name + ":\n" + path.read_text(errors="replace")[-12000:])
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (ValueError, OSError, KeyError, subprocess.CalledProcessError, json.JSONDecodeError) as exc:
+        print("asahi:", exc, file=sys.stderr)
+        sys.exit(1)
+    except KeyboardInterrupt:
+        sys.exit(130)

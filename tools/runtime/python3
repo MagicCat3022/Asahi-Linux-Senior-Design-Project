@@ -1,0 +1,2 @@
+#!/bin/sh
+exec "$ASAHI_HV_PYTHON" "$ASAHI_HV_RUNNER" --python "$@"

@@ -66,4 +66,24 @@ git clone --single-branch --branch project \
   Asahi-Linux-Senior-Design-Project-docs
 ```
 
-This repository setup does not install a kernel build environment or verify a kernel build. Follow the build documentation on the selected kernel branch when setting up that environment.
+## WSL, SSH, and m1n1 hypervisor workflow
+
+See [Kernel development and HV testing](docs/KERNEL_WORKFLOW.md) for Windows USB
+forwarding, SSH setup, native Mac kernel builds, candidate module staging,
+baseline recovery, and persistent serial/HV sessions that a developer or
+assistant can operate with the same tools.
+
+See [Development branches and USB-C/DP testing](docs/BRANCH_HV_TESTING.md)
+for pinned branch builds, the J413 driver profile, required Mac port selection,
+and driver readiness checks before display hotplug testing.
+
+```sh
+./tools/asahi doctor --online
+./tools/asahi build --dry-run
+./tools/asahi --help
+```
+
+First-time setup starts with `./tools/asahi init --target USER@MAC_IP`. Machine
+configuration, binaries, and run logs remain local and ignored by Git. The
+workflow uses a separate configured kernel source tree; it does not build a
+kernel from the documentation-only `project` branch.
