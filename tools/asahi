@@ -30,7 +30,6 @@ STATE = ROOT / ".asahi"
 CONFIG = ROOT / "asahi.local.json"
 REMOTE = ROOT / "tools/asahi-remote.py"
 PROFILES = ROOT / "tools/profiles"
-GUIDES = "docs/guides/"
 # Values `init` writes to asahi.local.json; see docs/reference/asahi-tool.md.
 DEFAULTS = {"identity": "~/.ssh/asahi_hv", "m1n1_dir": "~/projects/m1n1",
             "build_source": "~/linux-fairydust", "make_args": ["LLVM=1"],
@@ -482,7 +481,7 @@ def doctor(cfg, args):
         print(json.dumps(target, indent=2))
         ok &= target["sudo"] and target["ssh_enabled"] == "enabled"
     if not ok:
-        fail("Some checks failed; see " + GUIDES + "set-up-the-controller-pc.md and "
+        fail("Some checks failed; see docs/guides/set-up-the-controller-pc.md and "
              "docs/reference/asahi-tool.md#troubleshooting")
 
 
@@ -639,7 +638,7 @@ def next_step(status):
                     "then check ./tools/asahi logs")
         return "Session waiting for the Mac: boot the m1n1 proxy entry, or ./tools/asahi session attach"
     if run.get("check") and not run.get("recorded_in"):
-        return f"Run {run['id']} is not in any experiment report: see {GUIDES}recording-an-experiment.md"
+        return f"Run {run['id']} is not in any experiment report: see docs/guides/recording-an-experiment.md"
     return "./tools/asahi session start --wait 600, then boot the Mac into its m1n1 proxy entry"
 
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check documentation layout rules from docs/README.md: links, names, headers, indexes."""
+"""Check documentation layout rules from docs/README.md: links, names, headers, indexes, tool pointers."""
 from pathlib import Path
 import re
 import sys
@@ -10,6 +10,7 @@ NAME = re.compile(r"[a-z0-9][a-z0-9.-]*")
 FAILURE = re.compile(r"F-\d{3}-[a-z0-9-]+\.md")
 WEEK = re.compile(r"\d{4}-W\d{2}\.md")
 EXPERIMENT = re.compile(r"\d{4}-\d{2}-\d{2}-[a-z0-9-]+")
+DOC_PATH = re.compile(r"\bdocs/[\w/.-]+\.md(?:#[\w-]+)?")
 
 
 def anchors(text):
@@ -49,6 +50,16 @@ def check(root):
                 problems.append(f"{path.relative_to(root)}: broken link {target}")
             elif anchor and destination.suffix == ".md" and anchor not in anchors(destination.read_text()):
                 problems.append(f"{path.relative_to(root)}: missing anchor {target}")
+    # Error messages and help in tools/ point people at docs; keep those paths real.
+    for path in sorted((root / "tools").glob("*")) if (root / "tools").is_dir() else []:
+        if not path.is_file() or path.name == "check-docs.py":
+            continue
+        for target in sorted(set(DOC_PATH.findall(path.read_text(errors="replace")))):
+            file_part, _, anchor = target.partition("#")
+            if not (root / file_part).is_file():
+                problems.append(f"tools/{path.name}: points to missing {target}")
+            elif anchor and anchor not in anchors((root / file_part).read_text()):
+                problems.append(f"tools/{path.name}: points to missing anchor {target}")
     docs = root / "docs"
     for path in docs.rglob("*"):
         parts = path.relative_to(docs).parts

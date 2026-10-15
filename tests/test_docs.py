@@ -22,6 +22,8 @@ class Documentation(unittest.TestCase):
             for folder in ("guides", "experiments/2026-10-14-run", "failures"):
                 (root / "docs" / folder).mkdir(parents=True)
             (root / "README.md").write_text("[gone](docs/missing.md) [anchor](docs/guides/a-guide.md#nope)\n")
+            (root / "tools").mkdir()
+            (root / "tools/asahi").write_text('fail("see docs/guides/gone.md or docs/guides/a-guide.md#real-heading")\n')
             (root / "docs/guides/a-guide.md").write_text("# A guide\n\n## Real heading\n")
             (root / "docs/guides/Bad Name.md").write_text("# Bad\n\n**Last verified:** today\n")
             (root / "docs/experiments/README.md").write_text("# Experiments\n")
@@ -32,8 +34,10 @@ class Documentation(unittest.TestCase):
             problems = "\n".join(check_docs.check(root))
             for expected in ("broken link docs/missing.md", "missing anchor docs/guides/a-guide.md#nope",
                              "Bad Name.md: name is not lowercase", "a-guide.md: missing **Last verified:**",
-                             "2026-10-14-run: not listed", "F-001-b.md: duplicate ID", "F-001-a.md: not listed"):
+                             "2026-10-14-run: not listed", "F-001-b.md: duplicate ID", "F-001-a.md: not listed",
+                             "tools/asahi: points to missing docs/guides/gone.md"):
                 self.assertIn(expected, problems)
+            self.assertNotIn("a-guide.md#real-heading", problems)
 
     def test_github_anchor_slugs(self):
         text = "# Title\n## 2. Install m1n1\n## Power workaround (4)\n## Overview of `atc.c`\n## Title\n"
