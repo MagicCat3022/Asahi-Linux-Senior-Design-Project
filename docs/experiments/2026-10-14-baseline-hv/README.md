@@ -22,7 +22,7 @@ on the front port.
 | Config | `/boot/config-7.1.13-fairydust+`, SHA-256 `81e3ad71bcf015e2c3cc08856c31410e5fcb6a6f93b60114e2792c265b5e0684` |
 | Driver profile | none for the boot; `j413-usbc-dp` for the driver checks |
 | m1n1 commit | `ce2b8a43cea4220b602af1005dc9dbfc59c9624e` |
-| Guide followed | [kernel workflow](../../guides/kernel-workflow.md) as of project commit `07324248e65a` |
+| Guide followed | [kernel workflow](https://github.com/MagicCat3022/Asahi-Linux-Senior-Design-Project/blob/07324248e65a99e39b99240519058a00db5ebf7c/docs/KERNEL_WORKFLOW.md) as of project commit `07324248e65a` |
 | Hardware | `MAC-01`; proxy cable on **ATC1** (front port, iodev 5); `PC-01`; no external display |
 
 ## Procedure

@@ -2,7 +2,7 @@
 
 **Written:** October 2026 · How m1n1's proxy and hypervisor modes work, and how
 to read hardware registers through them. To run the team's HV test loop, follow
-the [kernel workflow guide](../guides/kernel-workflow.md), which automates the
+[Test a kernel](../guides/test-a-kernel.md), which automates the
 host setup below.
 
 ```text

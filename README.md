@@ -2,103 +2,47 @@
 
 [![Sync upstream kernel branches](https://github.com/MagicCat3022/Asahi-Linux-Senior-Design-Project/actions/workflows/sync-upstream.yml/badge.svg?branch=project)](https://github.com/MagicCat3022/Asahi-Linux-Senior-Design-Project/actions/workflows/sync-upstream.yml)
 
-Senior design fork of [AsahiLinux/linux](https://github.com/AsahiLinux/linux), including the [fairydust branch](https://github.com/AsahiLinux/linux/tree/fairydust).
-The project aims to improve USB-C DisplayPort support on M1/M2 Macs; see the
-[proposal](deliverables/proposal/).
+A UConn senior design project to improve USB-C DisplayPort support on M1 and
+M2 Macs in [Asahi Linux](https://asahilinux.org/). We change the kernel's
+USB-C and display drivers in Asahi's `fairydust` branch, test them on real
+Macs, and record the results. See the [proposal](deliverables/proposal/).
 
-## Where things are
+## Start here
+
+1. **[How it works](docs/overview.md):** the project, the test setup, and the
+   words we use. Read this first.
+2. **Set up:** [the test Mac](docs/guides/set-up-the-test-mac.md), then
+   [the controller PC](docs/guides/set-up-the-controller-pc.md).
+3. **Every test:** [Test a kernel](docs/guides/test-a-kernel.md), then
+   [Record an experiment](docs/guides/recording-an-experiment.md).
+
+Everything else, including results, known failures, and decisions, is listed
+in [docs/](docs/README.md).
+
+```sh
+./tools/asahi status    # where things stand and what to do next
+./tools/asahi --help    # every command, grouped by step
+```
+
+## What's in this branch
+
+This is the `project` branch: docs and tools only, with no kernel source.
 
 | Path | Contents |
 | --- | --- |
-| [docs/](docs/README.md) | Guides, reference, research, experiment reports, failure catalogue, decisions, weekly status; start at [docs/README.md](docs/README.md) |
-| [deliverables/](deliverables/README.md) | Sources for course reports |
-| [tools/](tools/), [tests/](tests/) | The WSL/m1n1 HV workflow (`./tools/asahi`) and its tests |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | Branches, pull requests, and checks |
-| [AGENTS.md](AGENTS.md) | Rules for AI coding assistants working in this repo |
+| [docs/](docs/README.md) | Guides, reference, research, experiment reports, failures, decisions, weekly status |
+| [tools/](tools/), [tests/](tests/) | `./tools/asahi`, the build-and-test tool, and its tests |
+| [deliverables/](deliverables/README.md) | Course reports |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Branches, pull requests, commit messages |
+| [AGENTS.md](AGENTS.md) | Instructions for AI coding assistants |
 
-## Branches
+Kernel code lives on the `fairydust`, `asahi`, and `main` branches (daily
+copies of upstream) and on our `work/*` branches. See
+[Branches and the upstream sync](docs/reference/branches-and-sync.md).
 
-| Branch | Purpose | Automatic updates |
-| --- | --- | --- |
-| [`main`](https://github.com/MagicCat3022/Asahi-Linux-Senior-Design-Project/tree/main) | Tracks `AsahiLinux/linux:main` | Daily |
-| [`fairydust`](https://github.com/MagicCat3022/Asahi-Linux-Senior-Design-Project/tree/fairydust) | Tracks `AsahiLinux/linux:fairydust` | Daily |
-| [`asahi`](https://github.com/MagicCat3022/Asahi-Linux-Senior-Design-Project/tree/asahi) | Tracks upstream's default branch, `AsahiLinux/linux:asahi` | Daily |
-| `project` (default) | Project documentation and GitHub Actions configuration | Maintained by the team |
-
-The default `project` branch has its own history and contains no kernel source. Select a kernel branch above to browse or build the kernel. Keeping automation on `project` lets the three tracked branches retain upstream's exact commits.
-
-Put project notes and research in this branch, following [docs/README.md](docs/README.md). Create development branches from the appropriate kernel branch for code changes, for example `work/fairydust-usb`. Open code pull requests against the team's development branch, not the upstream-tracking branches or the documentation-only `project` branch.
-
-## Daily upstream sync
-
-The [sync workflow](.github/workflows/sync-upstream.yml) runs daily at **09:17 UTC** (5:17 a.m. Eastern Daylight Time / 4:17 a.m. Eastern Standard Time). It also runs when its workflow file changes on `project`, and can be run manually under **Actions -> Sync upstream kernel branches -> Run workflow**, using the `project` branch.
-
-Each tracked branch is updated independently through GitHub's API with `force: false`. No kernel checkout or personal access token is needed; the workflow uses the repository's built-in `GITHUB_TOKEN` with `contents: write` permission.
-
-- A branch advances only when the update is a fast-forward.
-- If someone commits directly to a tracked branch, or upstream rebases/force-pushes it, its sync job fails without overwriting commits. The other branches are still processed.
-- A deleted branch or an API/permissions error fails visibly; the workflow does not silently recreate or reset branches.
-- Inspect failed jobs in Actions. Preserve any project commits on a development branch, inspect the upstream history, and choose a recovery before resetting a tracked branch. The workflow does not make that decision automatically.
-- Changes on `project` and team development branches are never touched by this workflow. Merge or rebase upstream updates into your development branches deliberately.
-
-Scheduled runs can be delayed by GitHub. GitHub also disables schedules in public repositories after **60 days without repository activity**; re-enable this workflow in Actions if that happens. Keep `project` as the default branch because scheduled workflows run from the default branch. See [GitHub's schedule documentation](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule).
-
-## Start kernel development
-
-Clone kernel source onto Linux, the WSL2 Linux filesystem, or the test Mac. Kernels you boot on hardware are built on the Mac; see [decision 0003](docs/decisions/0003-native-builds-on-mac.md). For work based on fairydust:
-
-```sh
-git clone --single-branch --branch fairydust \
-  https://github.com/MagicCat3022/Asahi-Linux-Senior-Design-Project.git
-cd Asahi-Linux-Senior-Design-Project
-git remote add upstream https://github.com/AsahiLinux/linux.git
-git switch -c work/fairydust
-git push -u origin work/fairydust
-```
-
-Substitute `asahi` or `main` for `fairydust` if that is the intended base. A single-branch clone avoids downloading every experimental upstream branch, but kernel history is still large.
-
-To incorporate later fairydust updates into your development branch:
-
-```sh
-git fetch upstream fairydust
-git switch work/fairydust
-git merge FETCH_HEAD
-```
-
-Resolve any conflicts and test before pushing. Upstream history rewrites may require a deliberate rebase/cherry-pick instead of a merge.
-
-## Edit project documentation
-
-Read [docs/README.md](docs/README.md) for where each kind of document goes and
-[CONTRIBUTING.md](CONTRIBUTING.md) for the pull-request workflow. For a small
-checkout of the documentation and automation branch:
+To check out only this branch:
 
 ```sh
 git clone --single-branch --branch project \
-  https://github.com/MagicCat3022/Asahi-Linux-Senior-Design-Project.git \
-  Asahi-Linux-Senior-Design-Project-docs
+  https://github.com/MagicCat3022/Asahi-Linux-Senior-Design-Project.git
 ```
-
-## WSL, SSH, and m1n1 hypervisor workflow
-
-See [Kernel development and HV testing](docs/guides/kernel-workflow.md) for Windows USB
-forwarding, SSH setup, native Mac kernel builds, candidate module staging,
-baseline recovery, and persistent serial/HV sessions that a developer or
-assistant can operate with the same tools.
-
-See [Development branches and USB-C/DP testing](docs/guides/branch-hv-testing.md)
-for pinned branch builds, the J413 driver profile, required Mac port selection,
-and driver readiness checks before display hotplug testing. Record results
-with [Record an experiment](docs/guides/recording-an-experiment.md).
-
-```sh
-./tools/asahi doctor --online
-./tools/asahi build --dry-run
-./tools/asahi --help
-```
-
-First-time setup starts with `./tools/asahi init --target USER@MAC_IP`. Machine
-configuration, binaries, and run logs remain local and ignored by Git. The
-workflow uses a separate configured kernel source tree; it does not build a
-kernel from the documentation-only `project` branch.

@@ -26,7 +26,7 @@ ready for hot-plug testing with a monitor. Related failures:
 | Driver profile | `j413-usbc-dp` |
 | Toolchain | Clang/LLD 22.1.8, rustc 1.99.0, bindgen 0.72.1, pahole 1.32, Fedora 44 |
 | m1n1 commit | `ce2b8a43cea4220b602af1005dc9dbfc59c9624e` |
-| Guide followed | [branch testing guide](../../guides/branch-hv-testing.md) as of project commit `07324248e65a` |
+| Guide followed | [branch testing guide](https://github.com/MagicCat3022/Asahi-Linux-Senior-Design-Project/blob/07324248e65a99e39b99240519058a00db5ebf7c/docs/BRANCH_HV_TESTING.md) as of project commit `07324248e65a` |
 | Hardware | `MAC-01`; proxy on ATC1 for the first run, **ATC0** (iodev 4) for the others; `PC-01`; no external display |
 
 ## Procedure
@@ -80,8 +80,8 @@ here confirms or rules out any failure entry.
 
 ## Next steps
 
-- Connect a monitor to ATC1 and run the hot-plug procedure in step 6 of the
-  [branch testing guide](../../guides/branch-hv-testing.md), recording
+- Connect a monitor to ATC1 and run the
+  [display hot-plug tests](../../guides/test-a-kernel.md#display-hot-plug-tests), recording
   hardware IDs from [the inventory](../../reference/hardware.md).
 - Run the same hot-plug procedure on the unmodified baseline for a comparison
   rate.

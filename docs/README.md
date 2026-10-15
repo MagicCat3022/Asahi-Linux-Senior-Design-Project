@@ -13,11 +13,17 @@ the course deliverables.
 
 ## Start here
 
+New to the project? Read [overview.md](overview.md): what we're building, how
+the test setup works, and where things are kept.
+
 | I want to… | Go to |
 | --- | --- |
-| Set up the PC and Mac and boot a test kernel | [guides/kernel-workflow.md](guides/kernel-workflow.md) |
-| Test a development branch, including USB-C/DP | [guides/branch-hv-testing.md](guides/branch-hv-testing.md) |
+| Understand how the test setup works | [overview.md](overview.md) |
+| Look up a word | [reference/glossary.md](reference/glossary.md) |
+| Set up a Mac or a PC | [guides/set-up-the-test-mac.md](guides/set-up-the-test-mac.md), [guides/set-up-the-controller-pc.md](guides/set-up-the-controller-pc.md) |
+| Build and boot a test kernel, including USB-C display tests | [guides/test-a-kernel.md](guides/test-a-kernel.md) |
 | Write up a hardware run | [guides/recording-an-experiment.md](guides/recording-an-experiment.md) |
+| Look up a command, setting, or error | [reference/asahi-tool.md](reference/asahi-tool.md) |
 | See what has been tested | [experiments/](experiments/README.md) |
 | See known failures and their status | [failures/](failures/README.md) |
 | Know why something is done a certain way | [decisions/](decisions/README.md) |
@@ -43,8 +49,9 @@ back to the repo, never a second copy that people edit.
 ```text
 docs/
   README.md        this page
+  overview.md      how the project and test setup work; read first
   guides/          how to do something; kept current
-  reference/       stable facts: hardware inventory, links
+  reference/       facts to look up: glossary, tool, kernel config, hardware, branches, links
   research/        how the code and hardware work; dated
   experiments/     one folder per hardware run we cite; frozen
     YYYY-MM-DD-slug/
@@ -64,7 +71,7 @@ to that index in the same commit.
 
 | Type | Folder | After it's written | File name | Template |
 | --- | --- | --- | --- | --- |
-| Guide | `guides/` | Edit in place; keep it correct | `kernel-workflow.md` | header in [guides/README.md](guides/README.md) |
+| Guide | `guides/` | Edit in place; keep it correct | `test-a-kernel.md` | header and shape in [guides/README.md](guides/README.md#writing-a-guide) |
 | Reference | `reference/` | Edit in place | `hardware.md` | none |
 | Research note | `research/` | Update, or point to what replaced it | `fairydust-status.md` | none |
 | Experiment report | `experiments/` | Frozen; corrections go in a dated *Corrections* section | `2026-10-14-tipd-oob-fixes/` | [experiment.md](templates/experiment.md) |
@@ -90,6 +97,9 @@ commit it followed.
 - **Results:** use only **PASS**, **FAIL**, **NOT TESTED**, or **BLOCKED**, and
   mark each as **automated** (a tool wrote the evidence) or **manual** (a
   person observed it). Repeated tests give a rate: "FAIL 3/10".
+- **Writing:** short sentences, plain words, and a diagram wherever a picture
+  is clearer than a paragraph. Define a term in the
+  [glossary](reference/glossary.md) rather than in every document.
 - **Format:** Markdown, one `#` heading per file, diagrams in Mermaid or a
   committed SVG. Draft in Word or Google Docs if you like, but convert before
   merging: `pandoc -t gfm --wrap=none -o out.md in.docx`.
@@ -127,8 +137,9 @@ deliverable is described in [deliverables/README.md](../deliverables/README.md).
 
 | Before 2026-10-14 | Now |
 | --- | --- |
-| `docs/KERNEL_WORKFLOW.md` | [guides/kernel-workflow.md](guides/kernel-workflow.md); its status section moved to [experiments/2026-10-14-baseline-hv](experiments/2026-10-14-baseline-hv/) |
-| `docs/BRANCH_HV_TESTING.md` | [guides/branch-hv-testing.md](guides/branch-hv-testing.md); its results moved to [experiments/2026-10-14-tipd-oob-fixes](experiments/2026-10-14-tipd-oob-fixes/) |
+| `docs/KERNEL_WORKFLOW.md` | Split into [overview.md](overview.md), [guides/set-up-the-test-mac.md](guides/set-up-the-test-mac.md), [guides/set-up-the-controller-pc.md](guides/set-up-the-controller-pc.md), [guides/test-a-kernel.md](guides/test-a-kernel.md), [reference/asahi-tool.md](reference/asahi-tool.md), and [reference/kernel-config.md](reference/kernel-config.md); its status section moved to [experiments/2026-10-14-baseline-hv](experiments/2026-10-14-baseline-hv/) |
+| `docs/BRANCH_HV_TESTING.md` | Merged into [guides/test-a-kernel.md](guides/test-a-kernel.md); its results moved to [experiments/2026-10-14-tipd-oob-fixes](experiments/2026-10-14-tipd-oob-fixes/) |
+| `README.md` sections on branches and the sync | [reference/branches-and-sync.md](reference/branches-and-sync.md) |
 | `Sharepoint/KERNEL_DEV.md` | [guides/x86-cross-build-qemu.md](guides/x86-cross-build-qemu.md) |
 | `Sharepoint/m1n1_Paper.md` | [research/m1n1-overview.md](research/m1n1-overview.md) |
 | `Sharepoint/Overview of atc.c, core.c.md` | [research/atc-phy-and-tipd-overview.md](research/atc-phy-and-tipd-overview.md) |

@@ -6,7 +6,7 @@
 
 Use this guide to compile-check kernel changes, or to boot generic arm64
 changes in QEMU, on a PC without the Mac. Kernels you want to run on Apple
-hardware go through the [kernel workflow](kernel-workflow.md) instead, which
+hardware go through [Test a kernel](test-a-kernel.md) instead, which
 builds natively on the Mac and boots under the m1n1 hypervisor. See
 [decision 0003](../decisions/0003-native-builds-on-mac.md).
 
@@ -216,7 +216,7 @@ Building the `asahi` configuration is worthwhile without hardware, because it
 compiles every Asahi driver and catches errors in code that cannot otherwise be
 exercised. Runtime behaviour remains untested.
 
-The team tests on hardware with the [kernel workflow](kernel-workflow.md),
+The team tests on hardware with [Test a kernel](test-a-kernel.md),
 which boots kernels under the m1n1 hypervisor without touching the Mac's
 installed boot files.
 

@@ -13,15 +13,19 @@ WSL by usbipd-win) for m1n1. PC paths and Mac paths are different namespaces.
 
 | Path | What it is | Read it when |
 | --- | --- | --- |
+| [docs/overview.md](docs/overview.md) | How the test setup works, the Mac's states, where things are kept | First, if you haven't read it |
 | [docs/README.md](docs/README.md) | Map of the docs and the rules for writing them | Before adding or moving any document |
-| [docs/guides/kernel-workflow.md](docs/guides/kernel-workflow.md) | Setup, build, stage, HV boot | Before running any workflow command |
-| [docs/guides/branch-hv-testing.md](docs/guides/branch-hv-testing.md) | Pinned branch builds and J413 USB-C/DP checks | Before testing a development branch |
+| [docs/guides/test-a-kernel.md](docs/guides/test-a-kernel.md) | Build, stage, HV boot, check, USB-C/DP tests, shutdown | Before running any workflow command |
+| [docs/guides/set-up-the-test-mac.md](docs/guides/set-up-the-test-mac.md), [set-up-the-controller-pc.md](docs/guides/set-up-the-controller-pc.md) | One-time setup | When `status` says something isn't set up |
 | [docs/guides/recording-an-experiment.md](docs/guides/recording-an-experiment.md) | Turning a run into a report | After any hardware run |
+| [docs/reference/asahi-tool.md](docs/reference/asahi-tool.md) | Config keys, `.asahi/` layout, driver profiles, troubleshooting | When a command fails or before changing `tools/` |
+| [docs/reference/glossary.md](docs/reference/glossary.md) | Terms | When a word is unclear |
 | [docs/experiments/](docs/experiments/README.md) | Frozen reports with redacted evidence | To learn what has been tested |
 | [docs/failures/](docs/failures/README.md) | Failure catalogue (`F-NNN`) | Before investigating a display bug |
 | [docs/decisions/](docs/decisions/README.md) | Why things are done this way | Before changing a convention |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Branches, pull requests, commit messages | Before committing |
-| `tools/asahi` | Single entry point for the workflow; `./tools/asahi --help` | — |
+| `tools/asahi` | Single entry point for the workflow; `./tools/asahi --help`, `./tools/asahi COMMAND --help` | — |
+| `tools/profiles/*.json` | Driver profiles (board, required drivers, proxy port) | Before a USB-C/DP test |
 | `tools/check-docs.py` | Documentation checks | Before finishing any docs change |
 | `asahi.local.json`, `.asahi/` | Machine config and generated state (ignored) | Never commit |
 | `~/Github/asahi-sdp-evidence` | Clone of the **private** evidence repository (free-text run logs) | When recording or reading run logs |
@@ -57,9 +61,12 @@ WSL by usbipd-win) for m1n1. PC paths and Mac paths are different namespaces.
 
 All commands run in WSL from the repository root.
 
-**Orient first.** Run `./tools/asahi doctor --online`. It shows HOME, the
-project path, devices, SSH, and sudo. Then run `./tools/asahi bundles` to see
-the selected bundle. Read the latest experiment report for current state.
+**Orient first.** Run `./tools/asahi status --json`. It reads only local
+state, so it's safe at any time, including during a live run. It reports the
+config, the Mac's board and matching profiles, the selected bundle, the last
+build, the tmux session's windows, the devices, the last run, and a `next`
+step. Use `./tools/asahi doctor --online` when you need to check tools, SSH,
+and sudo. Read the latest experiment report for the current findings.
 
 **Build and stage a candidate** (Mac must be booted normally):
 
@@ -75,7 +82,8 @@ the selected bundle. Read the latest experiment report for current state.
   an existing module release, and never change the Mac's normal boot entry.
 - Read the instructions in the kernel source tree before editing it.
 - Omit `--profile` and `driver-check` for experiments that don't involve
-  USB-C/DP.
+  USB-C/DP. Profiles are listed in `build --help`; only `j413-usbc-dp`
+  exists, and only J413 has been tested.
 
 **Boot under HV.** Physical steps (powering the Mac, startup options, moving
 cables) need the user. Ask them, and wait.
@@ -86,9 +94,11 @@ cables) need the user. Ask them, and wait.
    (`./tools/asahi ssh -- sudo -n systemctl poweroff`) and confirm in
    `./tools/asahi logs`. Only then run `tmux kill-session -t asahi-hv`.
 3. `./tools/asahi session start --wait 600`, then ask the user to boot the
-   m1n1 proxy entry. For DP tests the proxy cable must be on **ATC0**
-   ([decision 0002](docs/decisions/0002-proxy-on-atc0.md)); never ask anyone
-   to move it while a guest runs.
+   m1n1 proxy entry. For a bundle with a profile, the proxy cable must be on
+   the port the profile names (`proxy_port`; ATC0 for `j413-usbc-dp`,
+   [decision 0002](docs/decisions/0002-proxy-on-atc0.md)). The launcher
+   refuses the wrong port. Never ask anyone to move the cable while a guest
+   runs.
 4. `./tools/asahi check --wait 180`, then `./tools/asahi driver-check --live`
    for DP tests.
 
@@ -104,7 +114,11 @@ SSH. `check --running` is only a normal-boot baseline check.
 
 **Tool code.** The HV launcher replaces its Python process (`exec`) before
 running m1n1's helper, so Ctrl-C reaches only the HV shell. Preserve that.
-After changing `tools/` or `tests/`, run:
+Every command needs an entry in `COMMANDS` and `GROUPS` in `tools/asahi`,
+help text on every option, and a row in
+[docs/reference/asahi-tool.md](docs/reference/asahi-tool.md#commands); a test
+enforces the first two. Board-specific facts belong in a profile, not in
+code. After changing `tools/` or `tests/`, run:
 
 ```bash
 uv run --no-project --python 3.13 --with pyserial==3.5 \
@@ -143,5 +157,8 @@ After any hardware run worth citing, follow
   dated *Corrections* note. Write a new record instead.
 - Add every new file to its folder's `README.md` index in the same change.
 - Refer to hardware by inventory ID (`MAC-01`), not by owner or hostname.
-- Write for teammates: plain sentences, no references to chats or sessions.
+- Write for teammates: short, plain sentences, a diagram where it helps, terms
+  defined in the [glossary](docs/reference/glossary.md), and no references to
+  chats or sessions. Guides follow the shape in
+  [docs/guides/README.md](docs/guides/README.md#writing-a-guide).
 - Run `python3 tools/check-docs.py` before finishing.

@@ -12,6 +12,15 @@ catalogue, the before/after failure rates, and the final report.
 This repository is public and, as a fork, can't be made private. So evidence
 is split ([decision 0004](../decisions/0004-private-evidence-repository.md)):
 
+```mermaid
+flowchart LR
+    run[".asahi/runs/RUN_ID/<br/>on your PC"] --> ev["./tools/asahi evidence<br/>redacts identifiers"]
+    ev -- "JSON records" --> pub["This repository<br/>docs/experiments/SLUG/evidence/RUN_ID/"]
+    ev -- "logs" --> priv["Private repository<br/>asahi-sdp-evidence/SLUG/RUN_ID/"]
+    pub -- "logs.md links to" --> priv
+    report["Report<br/>docs/experiments/SLUG/README.md"] -- "links" --> pub
+```
+
 | Evidence | Where | Why |
 | --- | --- | --- |
 | Reports and structured records (`boot.json`, `check.json`, driver checks, build summary) | This repository, `docs/experiments/SLUG/evidence/RUN_ID/` | Known fields, so redaction is reliable |
@@ -52,7 +61,7 @@ cable, monitor, or adapter to the inventory first.
 
 ## 2. Run it
 
-Follow the relevant guide. While it runs, note anything physical the tools
+Follow [Test a kernel](test-a-kernel.md). While it runs, note anything physical the tools
 can't see, such as "unplugged `CAB-02` at about 14:05, replugged 15 s later",
 and what you saw on screen. These become **manual** results.
 
@@ -66,7 +75,8 @@ git -C ~/Github/asahi-sdp-evidence pull
   --run-dir .asahi/runs/RUN_ID
 ```
 
-Without `--run-dir` it uses the latest run. The command:
+Without `--run-dir` it uses the latest run. `./tools/asahi status` reminds
+you when the latest checked run isn't in any report yet. The command:
 
 - writes the run's JSON records, the same-kernel `driver-check` reports taken
   during the run, and a build summary to `evidence/RUN_ID/` in this
