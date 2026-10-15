@@ -615,5 +615,81 @@ class Execution(unittest.TestCase):
                     os.close(descriptor)
 
 
+class Evidence(unittest.TestCase):
+    def fixture(self, root):
+        state = root / ".asahi"
+        host.save(state / "target.json", {"compatible": "apple,j413",
+                                          "root_uuid": "391a13cb-c57f-44cb-b1fc-ab233af9d9b4"})
+        run = state / "runs/20261014T010000000000Z"
+        host.save(run / "boot.json", {"release": "7.1-sdp", "bundle": str(root / ".asahi/bundles/b"),
+                                      "cmdline": "root=UUID=391a13cb-c57f-44cb-b1fc-ab233af9d9b4"})
+        (run / "serial.log").write_text(
+            "FDT: reporting device serial number: FX0AB12CD3\n"
+            "Linux version 7.1-sdp (alice@macbox) (clang version 22.1.8)\n"
+            "start=0123456789abcdef0123456789abcdef;hostname=macbox;machineid=fedcba9876543210fedcba9876543210\n"
+            "Expecting dev-disk-by\\x2duuid-975ed9cd\\x2d1915\\x2d4e3f\\x2dacc0\\x2de2fbdd048e20.device\n"
+            "EXT4-fs (nvme0n1p7): mounted filesystem 975ed9cd-1915-4e3f-acc0-e2fbdd048e20\n"
+            "brcmfmac: address 02:11:22:33:44:55; firmware version 20.96.31.0.8.7.148\n"
+            "commit 301e2ba4004a33f7c808489dc1b5951e41c5c09b keeps hashes\n"
+            "systemd[1]: Hostname set to <macbox>.\n"
+            "macbox login: \n")
+        (run / "m1n1-linux.bin").write_bytes(b"\0binary")
+        (state / "runs/20261014T020000000000Z").mkdir(parents=True)
+        host.save(state / "driver-checks/20261014T013000000000Z.json", {"release": "7.1-sdp", "passed": True})
+        host.save(state / "driver-checks/20261014T013100000000Z.json", {"release": "baseline", "passed": False})
+        host.save(state / "driver-checks/20261014T023000000000Z.json", {"release": "7.1-sdp", "passed": False})
+        host.save(state / "builds/20261014T000000000000Z/build.json", {
+            "release": "7.1-sdp", "source": "/home/alice/kernel", "commit": "301e2ba4",
+            "artifact_sha256": {".config": "c", "arch/arm64/boot/Image": "i", "drivers/a.ko": "a", "drivers/b.ko": "b",
+                                "arch/arm64/boot/dts/apple/t8112-j413.dtb": "j", "arch/arm64/boot/dts/apple/t8103-j274.dtb": "x"}})
+        return state, run
+
+    def collect(self, root, state, run, **options):
+        args = SimpleNamespace(destination="evidence", run_dir=str(run), driver_check=[], **options)
+        with patch.object(host, "ROOT", root), patch.object(host, "STATE", state), \
+             contextlib.redirect_stdout(io.StringIO()):
+            host.evidence({"target": "alice@192.0.2.5"}, args)
+        return root / "evidence" / run.name
+
+    def test_redacts_machine_identifiers_but_keeps_correlation_and_hashes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            state, run = self.fixture(root)
+            output = self.collect(root, state, run)
+            serial = (output / "serial.log").read_text()
+            for secret in ("FX0AB12CD3", "alice", "macbox", "975ed9cd", "fedcba98", "02:11:22", str(root)):
+                self.assertNotIn(secret, serial + (output / "boot.json").read_text())
+            self.assertIn("serial number: <serial-number>", serial)
+            self.assertIn("(<mac-user>@<mac-hostname>)", serial)
+            self.assertIn("<mac-hostname> login:", serial)
+            self.assertIn("Hostname set to <<mac-hostname>>.", serial)
+            self.assertEqual(serial.count("<uuid-1>"), 2)  # escaped and plain forms of one UUID
+            self.assertIn("root=UUID=<root-uuid>", (output / "boot.json").read_text())
+            self.assertIn("20.96.31.0.8.7.148", serial)
+            self.assertIn("301e2ba4004a33f7c808489dc1b5951e41c5c09b", serial)
+            self.assertIn("<project>/.asahi/bundles/b", (output / "boot.json").read_text())
+
+    def test_selects_same_kernel_driver_checks_from_the_run_and_summarizes_build(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            state, run = self.fixture(root)
+            output = self.collect(root, state, run)
+            names = sorted(path.name for path in output.iterdir())
+            self.assertEqual(names, ["boot.json", "build.json", "driver-check-20261014T013000000000Z.json", "serial.log"])
+            build = json.loads((output / "build.json").read_text())
+            self.assertEqual(build["module_count"], 2)
+            self.assertEqual(sorted(build["artifact_sha256"]),
+                             [".config", "arch/arm64/boot/Image", "arch/arm64/boot/dts/apple/t8112-j413.dtb"])
+            self.assertEqual(build["source"], "~/kernel")
+
+    def test_evidence_is_written_once(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            state, run = self.fixture(root)
+            self.collect(root, state, run)
+            with self.assertRaisesRegex(ValueError, "already exists"):
+                self.collect(root, state, run)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -448,7 +448,7 @@ def doctor(cfg, args):
         print(json.dumps(target, indent=2))
         ok &= target["sudo"] and target["ssh_enabled"] == "enabled"
     if not ok:
-        fail("Some checks failed; see docs/KERNEL_WORKFLOW.md")
+        fail("Some checks failed; see docs/guides/kernel-workflow.md")
 
 
 def session(cfg, args):
@@ -510,6 +510,108 @@ def check(cfg, args):
     (run_dir / "guest-health.log").write_bytes(report.stdout)
     print("PASS:", target["release"], target["root_source"], "SSH active")
     print("Kernel errors and failed services (review separately):", run_dir / "guest-health.log")
+
+
+EVIDENCE_LIMIT = 1024 * 1024
+SEP = r"(?:-|\\x2d)"  # systemd escapes '-' in unit names as \x2d
+UUID = re.compile(r"(?<![0-9A-Fa-f])[0-9A-Fa-f]{8}" + SEP + r"[0-9A-Fa-f]{4}" + SEP + r"[0-9A-Fa-f]{4}" + SEP
+                  + r"[0-9A-Fa-f]{4}" + SEP + r"[0-9A-Fa-f]{12}(?![0-9A-Fa-f])")
+MACHINE_ID = re.compile(r"(?<![0-9A-Fa-f])[0-9a-f]{32}(?![0-9A-Fa-f])")
+MAC_ADDRESS = re.compile(r"(?<![0-9A-Fa-f:])(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}(?![0-9A-Fa-f:])")
+DEVICE_SERIAL = re.compile(r"(?i)(serial[ _-]?(?:number|no)\b\W{0,3})([A-Z0-9]{8,20})")
+ECID = re.compile(r"(?i)(\becid\W{0,3})(0x[0-9a-f]+|[0-9a-f]{10,})")
+
+
+def redactor(cfg, texts):
+    """Replace identifiers of this Mac and PC; the repository is public."""
+    user, _, host = cfg["target"].partition("@")
+    paths = {str(ROOT): "<project>", str(Path.home()): "~", "/home/" + user: "~"}
+    found = re.findall(r"hostname=([A-Za-z0-9][\w.-]*)|Hostname set to <([^>\s]+)>", "\n".join(texts))
+    hostnames = {host} | {name for pair in found for name in pair if name}
+    builders = {(u, h) for text in texts for u, h in re.findall(r"\(([^\s@()]+)@([^\s()]+)\) \(", text)}
+    hostnames |= {h for _, h in builders}
+    users = {user} | {u for u, _ in builders}
+    seen, counts = {}, {}
+    target = load(STATE / "target.json") if (STATE / "target.json").exists() else {}
+    for key, label in (("root_uuid", "<root-uuid>"), ("efi_partuuid", "<efi-partuuid>")):
+        if target.get(key):
+            seen[("uuid", target[key].lower())] = label
+
+    def numbered(kind, value):
+        key = (kind, value.lower().replace("\\x2d", "-"))
+        if key not in seen:
+            counts[kind] = counts.get(kind, 0) + 1
+            seen[key] = f"<{kind}-{counts[kind]}>"
+        return seen[key]
+
+    def apply(text):
+        for value, label in sorted(paths.items(), key=lambda item: -len(item[0])):
+            text = text.replace(value, label)
+        for name in users - {""}:
+            text = re.sub(r"(?<![\w.-])" + re.escape(name) + "@", "<mac-user>@", text)
+        for name in hostnames - {""}:
+            if re.fullmatch(r"[\d.]+|[\da-fA-F:]+", name):
+                text = text.replace(name, "<mac-host>")
+            else:
+                text = re.sub(r"(?<=hostname=)" + re.escape(name) + r"(?![\w.-])|(?<=Hostname set to <)" + re.escape(name)
+                              + r"(?=>)|(?<=@)" + re.escape(name)
+                              + r"(?![\w.-])|(?<![\w.-])" + re.escape(name) + r"(?= login:)", "<mac-hostname>", text)
+        text = DEVICE_SERIAL.sub(lambda match: match.group(1) + "<serial-number>", text)
+        text = ECID.sub(lambda match: match.group(1) + "<ecid>", text)
+        text = UUID.sub(lambda match: numbered("uuid", match.group()), text)
+        text = MACHINE_ID.sub(lambda match: numbered("id", match.group()), text)
+        return MAC_ADDRESS.sub(lambda match: numbered("mac", match.group()), text)
+    return apply
+
+
+def build_summary(release):
+    for record in sorted((STATE / "builds").glob("*/build.json")):
+        build = load(record)
+        if build.get("release") != release:
+            continue
+        board = load(STATE / "target.json")["compatible"].split(",")[-1]
+        hashes = build.get("artifact_sha256", {})
+        kept = {name: value for name, value in hashes.items()
+                if not name.endswith(".ko") and (not name.endswith(".dtb") or name.endswith("-" + board + ".dtb"))}
+        return {**{key: value for key, value in build.items() if key != "artifact_sha256"},
+                "build_record": record.parent.name, "module_count": sum(name.endswith(".ko") for name in hashes),
+                "artifact_sha256": kept}
+    return None
+
+
+def evidence(cfg, args):
+    run = local_path(args.run_dir) if args.run_dir else run_directory()
+    if not run.is_dir():
+        fail(f"No run directory {run}")
+    destination = local_path(args.destination) / run.name
+    if destination.exists():
+        fail(f"{destination} already exists; evidence is copied once per run")
+    record = next((load(run / name) for name in ("boot.json", "check.json") if (run / name).exists()), {})
+    release = record.get("release")
+    later = sorted(path.name for path in (STATE / "runs").iterdir() if path.name > run.name) if (STATE / "runs").is_dir() else []
+    end = later[0] if later else "~"
+    if args.driver_check:
+        checks = [local_path(path) for path in args.driver_check]
+    else:
+        # Reports taken while this run was the latest, for the same kernel.
+        checks = [path for path in sorted((STATE / "driver-checks").glob("*.json"))
+                  if run.name <= path.stem < end and load(path).get("release") == release]
+    files = {path.name: path.read_bytes() for path in sorted(run.iterdir())
+             if path.is_file() and path.suffix in {".json", ".log"}}
+    files.update({"driver-check-" + path.name: path.read_bytes() for path in checks})
+    summary = build_summary(release) if release else None
+    if summary:
+        files["build.json"] = (json.dumps(summary, indent=2) + "\n").encode()
+    texts = {name: data.decode("utf-8", "surrogateescape") for name, data in files.items()}
+    redact = redactor(cfg, list(texts.values()))
+    destination.mkdir(parents=True)
+    for name, text in texts.items():
+        data = redact(text).encode("utf-8", "surrogateescape")
+        if len(data) > EVIDENCE_LIMIT:
+            name, data = name + ".gz", gzip.compress(data, mtime=0)
+        (destination / name).write_bytes(data)
+        print(f"{len(data):>9}  {destination / name}")
+    print("Identifiers known to the workflow were replaced. Read the files before committing them.")
 
 
 def main():
@@ -575,6 +677,11 @@ def main():
     p.add_argument("--running", action="store_true", help="Check normal Asahi without claiming an HV boot")
     p = sub.add_parser("logs", help="Show the latest serial and HV log tails")
     p.add_argument("--run-dir")
+    p = sub.add_parser("evidence", help="Copy a run's records into an experiment folder with identifiers redacted")
+    p.add_argument("destination", help="Experiment evidence folder, e.g. docs/experiments/DATE-SLUG/evidence")
+    p.add_argument("--run-dir", help="Run to copy (default: latest)")
+    p.add_argument("--driver-check", action="append", default=[],
+                   help="Driver-check report to include (default: same-kernel reports taken during the run)")
     args = parser.parse_args()
     if args.operation == "init":
         if CONFIG.exists():
@@ -733,6 +840,8 @@ def main():
             path = directory / name
             if path.exists():
                 print("\n" + name + ":\n" + path.read_text(errors="replace")[-12000:])
+    elif op == "evidence":
+        evidence(cfg, args)
 
 
 if __name__ == "__main__":
