@@ -1,8 +1,12 @@
 # Test a development branch under m1n1 HV
 
+**Applies to:** MacBook Air M2 (J413), fairydust 7.1.x, `j413-usbc-dp` profile ·
+**Last verified:** 2026-10-14 on `MAC-01`; see
+[2026-10-14-tipd-oob-fixes](../experiments/2026-10-14-tipd-oob-fixes/)
+
 This procedure builds a pinned branch revision natively on the Mac, installs
 its uniquely named modules, and boots its kernel/DTB/initramfs through the WSL
-controller. Follow [KERNEL_WORKFLOW.md](KERNEL_WORKFLOW.md) first for machine
+controller. Follow [the kernel workflow guide](kernel-workflow.md) first for machine
 setup, dependencies, SSH, USB forwarding, and the baseline capture. The normal
 Asahi boot files remain the recovery path.
 
@@ -53,7 +57,7 @@ but has additional runtime overhead.
 ## 2. Check the USB-C/DP configuration
 
 For this J413/M2 experiment, the reusable profile is
-[`tools/profiles/j413-usbc-dp.json`](../tools/profiles/j413-usbc-dp.json).
+[`tools/profiles/j413-usbc-dp.json`](../../tools/profiles/j413-usbc-dp.json).
 It requires the branch's TIPD core/I2C driver, Type-C and DP alt mode, Apple
 ATC PHY, display crossbar, Apple DRM, I2C, DART, tunables, DWC3 glue, role
 switch, mailbox, and RTKit configuration. Required tristates can be `y` or
@@ -127,9 +131,10 @@ On this MacBook Air J413 with this branch's DTS:
 
 The m1n1 HV removes its active USB controller/PHY from the guest. Putting the
 proxy on ATC1 therefore removes the PHY required by this branch's external
-display wiring. In the previous baseline run this caused external DCP to
+display wiring. In the baseline run this caused external DCP to
 remain deferred with `Failed to get dp-phy: -517`, despite all the relevant
-modules being installed. Do not work around this by forcing Linux to reclaim
+modules being installed ([evidence](../experiments/2026-10-14-baseline-hv/),
+[decision 0002](../decisions/0002-proxy-on-atc0.md)). Do not work around this by forcing Linux to reclaim
 the proxy's PHY or unbinding its controller.
 
 Confirm the choice in the new `hv.log`: expect `Initializing hypervisor over
@@ -229,35 +234,15 @@ retain its serial/HV logs and select normal Asahi from startup options. Select
 a preserved baseline with `./tools/asahi use PATH_TO_BASELINE` for another HV
 run. Keep kernel experiment results separate from host tooling tests.
 
-## Current tipd-oob-fixes experiment
+## 7. Record the experiment
 
-The fetched revision is `301e2ba4004a33f7c808489dc1b5951e41c5c09b`, based on
-`ce9f2eba72c061a50b2d790450e90af3439d8c24`, with two commits in
-`drivers/usb/typec/tipd/core.c`: connector fwnode cleanup on unregister, and
-HPD edge filtering plus a consistent data-role snapshot. The test worktree
-uses that exact source revision and the working baseline configuration.
-The build and stage passed for release
-`7.1.13-fairydust-sdp-tipd-301e2ba4-20261014a`, with 5,805 modules. All 11
-requested modular profile drivers were verified in its initramfs; their
-installed version strings and dependency resolution passed. Installed baseline
-boot-file hashes remained unchanged. Host tooling validation passed 37 tests,
-including a real launcher/shim process-group interrupt check.
-The candidate's HV boot, exact launch identity, original root, SSH, and live
-driver binding checks passed on ATC0. The front PHY, crossbar, PD controller,
-external DCP, and display subsystem bound; the deferred-device list was empty.
-DRM exposed disconnected `DP-1` and connected `eDP-1` (2560x1600). No display
-is connected externally, so visible external output, hotplug, and link training
-remain untested. The final boot with the durable launcher passed the same
-checks, plus HV interrupt, CPU context inspection, and resume with SSH
-verified afterward. The controller remained alive after that test. The run
-uses a 512 MiB upload heap and records iodev 4; the 184 MiB initramfs is too
-large for the upstream loader's default 128 MiB upload heap.
-For this run, generated build outputs were seeded from the compiled clean
-parent checkout before the final incremental build. The branch's `.git`, full
-`.config`, and changed `drivers/usb/typec/tipd/core.c` were excluded from the
-copy. Both checkouts were locked, their commits/cleanliness were checked, and
-the protected file hashes were verified before and after. Kbuild then checks
-dependencies/commands and rebuilds for the branch and its unique release.
-The local experiment input record includes the cache parent and protected
-hashes. The full-build procedure above works without this optimization;
-do not copy parent sources over changed branch files or seed a live build.
+Copy each run's records into the experiment folder and write the report, as
+described in [Record an experiment](recording-an-experiment.md):
+
+```bash
+./tools/asahi evidence docs/experiments/YYYY-MM-DD-slug/evidence
+```
+
+Include the pre-boot `driver-check` report with `--driver-check PATH`. The
+tipd-oob-fixes candidate is a complete example:
+[2026-10-14-tipd-oob-fixes](../experiments/2026-10-14-tipd-oob-fixes/).

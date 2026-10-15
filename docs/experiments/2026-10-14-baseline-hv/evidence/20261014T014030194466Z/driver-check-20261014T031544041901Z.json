@@ -1,0 +1,123 @@
+{
+  "release": "7.1.13-fairydust+",
+  "profile": "j413-usbc-dp",
+  "modules": {
+    "typec": {
+      "vermagic": "7.1.13-fairydust+ SMP preempt mod_unload aarch64",
+      "dependencies": [
+        "insmod /lib/modules/7.1.13-fairydust+/kernel/drivers/usb/typec/typec.ko "
+      ],
+      "error": ""
+    },
+    "tps6598x-core": {
+      "vermagic": "7.1.13-fairydust+ SMP preempt mod_unload aarch64",
+      "dependencies": [
+        "insmod /lib/modules/7.1.13-fairydust+/kernel/drivers/usb/typec/typec.ko ",
+        "insmod /lib/modules/7.1.13-fairydust+/kernel/drivers/usb/typec/tipd/tps6598x-core.ko "
+      ],
+      "error": ""
+    },
+    "tps6598x": {
+      "vermagic": "7.1.13-fairydust+ SMP preempt mod_unload aarch64",
+      "dependencies": [
+        "insmod /lib/modules/7.1.13-fairydust+/kernel/drivers/usb/typec/typec.ko ",
+        "insmod /lib/modules/7.1.13-fairydust+/kernel/drivers/usb/typec/tipd/tps6598x-core.ko ",
+        "insmod /lib/modules/7.1.13-fairydust+/kernel/drivers/usb/typec/tipd/tps6598x.ko "
+      ],
+      "error": ""
+    },
+    "typec_displayport": {
+      "vermagic": "7.1.13-fairydust+ SMP preempt mod_unload aarch64",
+      "dependencies": [
+        "insmod /lib/modules/7.1.13-fairydust+/kernel/drivers/usb/typec/typec.ko ",
+        "insmod /lib/modules/7.1.13-fairydust+/kernel/drivers/usb/typec/altmodes/typec_displayport.ko "
+      ],
+      "error": ""
+    },
+    "phy-apple-atc": {
+      "vermagic": "7.1.13-fairydust+ SMP preempt mod_unload aarch64",
+      "dependencies": [
+        "insmod /lib/modules/7.1.13-fairydust+/kernel/drivers/soc/apple/apple-tunable.ko ",
+        "insmod /lib/modules/7.1.13-fairydust+/kernel/drivers/usb/typec/typec.ko ",
+        "insmod /lib/modules/7.1.13-fairydust+/kernel/drivers/phy/apple/phy-apple-atc.ko "
+      ],
+      "error": ""
+    },
+    "mux-apple-display-crossbar": {
+      "vermagic": "7.1.13-fairydust+ SMP preempt mod_unload aarch64",
+      "dependencies": [
+        "insmod /lib/modules/7.1.13-fairydust+/kernel/drivers/mux/mux-apple-display-crossbar.ko "
+      ],
+      "error": ""
+    },
+    "appledrm": {
+      "vermagic": "7.1.13-fairydust+ SMP preempt mod_unload aarch64",
+      "dependencies": [
+        "insmod /lib/modules/7.1.13-fairydust+/kernel/drivers/usb/typec/typec.ko ",
+        "insmod /lib/modules/7.1.13-fairydust+/kernel/drivers/gpu/drm/drm_dma_helper.ko ",
+        "insmod /lib/modules/7.1.13-fairydust+/kernel/sound/soundcore.ko ",
+        "insmod /lib/modules/7.1.13-fairydust+/kernel/sound/core/snd.ko ",
+        "insmod /lib/modules/7.1.13-fairydust+/kernel/sound/core/snd-timer.ko ",
+        "install /sbin/modprobe --ignore-install snd-pcm && /sbin/modprobe snd-seq ",
+        "insmod /lib/modules/7.1.13-fairydust+/kernel/sound/core/snd-pcm-dmaengine.ko ",
+        "insmod /lib/modules/7.1.13-fairydust+/kernel/drivers/gpu/drm/apple/appledrm.ko "
+      ],
+      "error": ""
+    },
+    "i2c-apple": {
+      "vermagic": "",
+      "dependencies": [],
+      "error": "modinfo: ERROR: Module i2c-apple not found.\nmodprobe: FATAL: Module i2c-apple not found in directory /lib/modules/7.1.13-fairydust+\n"
+    },
+    "dwc3-apple": {
+      "vermagic": "7.1.13-fairydust+ SMP preempt mod_unload aarch64",
+      "dependencies": [
+        "insmod /lib/modules/7.1.13-fairydust+/kernel/drivers/usb/common/ulpi.ko ",
+        "insmod /lib/modules/7.1.13-fairydust+/kernel/drivers/usb/gadget/udc/udc-core.ko ",
+        "insmod /lib/modules/7.1.13-fairydust+/kernel/drivers/usb/dwc3/dwc3.ko ",
+        "insmod /lib/modules/7.1.13-fairydust+/kernel/drivers/usb/dwc3/dwc3-apple.ko "
+      ],
+      "error": ""
+    },
+    "apple-dart": {
+      "vermagic": "7.1.13-fairydust+ SMP preempt mod_unload aarch64",
+      "dependencies": [
+        "insmod /lib/modules/7.1.13-fairydust+/kernel/drivers/iommu/apple-dart.ko "
+      ],
+      "error": ""
+    },
+    "apple-tunable": {
+      "vermagic": "7.1.13-fairydust+ SMP preempt mod_unload aarch64",
+      "dependencies": [
+        "insmod /lib/modules/7.1.13-fairydust+/kernel/drivers/soc/apple/apple-tunable.ko "
+      ],
+      "error": ""
+    }
+  },
+  "errors": [
+    "Missing/mismatched module or dependencies: i2c-apple",
+    "Device is not bound: 503000000.phy",
+    "Device is not bound: 271c00000.dcp",
+    "No DRM DisplayPort connector registered"
+  ],
+  "running_release": "7.1.13-fairydust+",
+  "bindings": {
+    "platform/phy-apple-atc/503000000.phy": false,
+    "platform/apple-display-crossbar/50304c000.mux": true,
+    "platform/apple-dcp/271c00000.dcp": false,
+    "platform/apple-drm/soc:display-subsystem": true
+  },
+  "pd_devices": [
+    "0-003f"
+  ],
+  "connectors": {
+    "card0-Unknown-1": {
+      "status": "connected",
+      "modes": [
+        "2560x1600"
+      ]
+    }
+  },
+  "deferred_devices": null,
+  "passed": false
+}

@@ -1,0 +1,22 @@
+{
+  "reason": "chainloader failed before reload at ARMAsm due to missing host GCC",
+  "restored_memory_map": {
+    "SEPFW": [
+      34430386176,
+      6144000
+    ],
+    "preoslog": [
+      34433843336,
+      262144
+    ],
+    "TrustCache": [
+      34426077184,
+      360448
+    ],
+    "BootArgs": [
+      34436530176,
+      16384
+    ]
+  },
+  "source": "original boot/copy addresses in hv.log"
+}

@@ -1,15 +1,26 @@
-# Asahi Kernel Development on x86-64
+# Cross-build the kernel on x86-64 and test in QEMU
 
-Build and test setup for this Asahi kernel tree on an x86-64 workstation.
+**Applies to:** Ubuntu 24.04 x86-64 host, fairydust 7.1.13 ·
+**Last verified:** before 2026-10-10 on an Ubuntu 24.04.5 x86-64 host with
+16 cores (exact date not recorded)
+
+Use this guide to compile-check kernel changes, or to boot generic arm64
+changes in QEMU, on a PC without the Mac. Kernels you want to run on Apple
+hardware go through the [kernel workflow](kernel-workflow.md) instead, which
+builds natively on the Mac and boots under the m1n1 hypervisor. See
+[decision 0003](../decisions/0003-native-builds-on-mac.md).
+
+> **Missing scripts.** The `dev/build.sh`, `dev/env.sh`, and `dev/run-qemu.sh`
+> helpers used below were kept untracked in the author's kernel checkout (see
+> [Layout and environment](#layout-and-environment)). They are not in this
+> repository yet. Until someone adds them under `tools/`, ask the guide's
+> author for a copy.
 
 - Tree: Linux 7.1.13 (`Baby Opossum Posse`), branch `fairydust`
-- Host: Ubuntu 24.04.5 LTS, x86-64, 16 cores
 - Target: arm64, Apple Silicon
 
-Builds were verified on this host: both configurations produce an `Image` and
-`vmlinux`, and the `defconfig` kernel boots under QEMU. The `asahi` kernel
-builds but has not been run on hardware, because no Apple Silicon machine was
-available. See *Testing Asahi drivers*.
+Both configurations below produce an `Image` and `vmlinux`, and the
+`defconfig` kernel boots under QEMU.
 
 ## Requirements
 
@@ -205,11 +216,11 @@ Building the `asahi` configuration is worthwhile without hardware, because it
 compiles every Asahi driver and catches errors in code that cannot otherwise be
 exercised. Runtime behaviour remains untested.
 
-Hardware options, in order of convenience: a spare M-series Mac installed
-per the [Asahi macOS guide](https://asahilinux.org/docs/macos/); a remote Mac
-reachable over SSH; or rentable bare-metal M-series cloud hardware.
+The team tests on hardware with the [kernel workflow](kernel-workflow.md),
+which boots kernels under the m1n1 hypervisor without touching the Mac's
+installed boot files.
 
-For reference, deployment copies the built `Image` to the EFI System Partition
+For reference only, a manual installation copies the built `Image` to the EFI System Partition
 and the modules to `/lib/modules` on the Linux root filesystem:
 
 ```bash
@@ -253,7 +264,6 @@ Asahi-Linux-Senior-Design-Project/
 │   ├── env.sh            # shared environment
 │   ├── build.sh          # build driver
 │   └── run-qemu.sh       # QEMU runner
-└── KERNEL_DEV.md         # this file
 
 ~/kernel-build/           # build outputs, outside the repository
 ├── defconfig/            # generic arm64, 4 KiB pages
@@ -304,7 +314,7 @@ bit-for-bit reproducible build is needed.
 
 ```bash
 ./dev/build.sh distclean    # build outputs and ccache
-rm -rf ~/kernel-build dev KERNEL_DEV.md
+rm -rf ~/kernel-build dev
 sed -i '/dev\//d' .git/info/exclude
 ```
 

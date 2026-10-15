@@ -1,4 +1,7 @@
-# Display over USB-C: Current Commits and Upstream PRs
+# Display over USB-C: current commits and upstream PRs
+
+**Snapshot:** taken on or before 2026-10-10. PR states rechecked on
+2026-10-14; see the note on #236.
 
 Branch: `fairydust` in this fork.
 Fork: `MagicCat3022/Asahi-Linux-Senior-Design-Project`
@@ -81,10 +84,15 @@ it is novel to this fork.
 | [#572](https://github.com/AsahiLinux/linux/pull/572) | `t8112-j493: Enable SIO for DP audio` | Umbrella for 11/12 local commits. Manually merged as [`ad272ad`](https://github.com/AsahiLinux/linux/commit/ad272ad5d6742869cdd13320e43f9ed01bd1fb33) into [`96775a0`](https://github.com/AsahiLinux/linux/commit/96775a0e72995e79e13b93755d456cb128dcdc81) on `fairydust`. Contains `b40d412` SIO fix, `ca77753` data_status tracking, and all dp-altmode + always-on DTS hacks. | Closed |
 | [#476](https://github.com/AsahiLinux/linux/pull/476) | `Enable dp-altmode for M1 Pro/Max MacBook Pro` | Moves `ENABLE_DCPEXT_TYPEC` per-machine for j314/j316 + pipehandler timeout bump. Overlaps `eebf132`. | Closed, not merged |
 | [#622](https://github.com/AsahiLinux/linux/pull/622) | `Fix external display hotplug on DP alt mode` | Follow-up: DCP swap completion + ATC PIPE park before mux switch. Tested on j413. | Closed (AI policy) |
-| [#236](https://github.com/AsahiLinux/linux/pull/236) | `dcp dptx hotplug fixes/changes` | Foundational DCP/DPTX hotplug, modeset, and ATC DP-PHY fixes by `jannau`. | Merged |
+| [#236](https://github.com/AsahiLinux/linux/pull/236) | `dcp dptx hotplug fixes/changes` | Foundational DCP/DPTX hotplug, modeset, and ATC DP-PHY fixes by `jannau`. | Closed; see note |
 | [#515](https://github.com/AsahiLinux/linux/pull/515) | `atc: Fall back to USB2 when pipehandler state is DUMMY` | Keeps USB2 alive when SS lanes are taken by DP. Tested on j413 `fairydust`. | Closed |
 | [#399](https://github.com/AsahiLinux/linux/pull/399) | `Add reset and UART VDM support to tipd` | Related TIPD work for Apple CD321x. | Closed |
 | [#510](https://github.com/AsahiLinux/linux/pull/510) | `quiesce inactive DCPs on suspend, fix resume crash` | Suspend/resume path for secondary DCP. Alternative to always-on workaround. Tested on J313 `fairydust`. | Open |
+
+**Note on #236:** this note originally said "Merged", but on 2026-10-14
+GitHub showed the PR as closed without a merge. Its commits may have been
+applied by hand, as #572's were. Check `fairydust` history before relying on
+it.
 
 Upstream branches:
 

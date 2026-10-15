@@ -1,42 +1,54 @@
 # Kernel development and m1n1 HV testing
 
-This workflow uses a Windows PC running Ubuntu WSL2 as the controller and a
-separate Apple Silicon Mac running Fedora Asahi as the build/test target.
-The same commands can be run by a person or by an assistant with access to
-this checkout and its configured SSH key.
+**Applies to:** MacBook Air M2 (J413) with Fedora Asahi, fairydust 7.1.x ·
+**Last verified:** 2026-10-14 on `MAC-01`; see
+[2026-10-14-baseline-hv](../experiments/2026-10-14-baseline-hv/) and
+[2026-10-14-tipd-oob-fixes](../experiments/2026-10-14-tipd-oob-fixes/)
 
-Run host commands from the **SDP `project` branch checkout**. Kernel source
-belongs in a separate kernel worktree. `tools/asahi` needs Python 3.11 or newer;
-m1n1 Python clients run through `uv` with Python 3.13 and m1n1's pinned dependencies.
+This guide sets up and runs the team's kernel test loop: build a kernel on the
+Mac, then boot it under the m1n1 hypervisor (HV) from a Windows PC so that a
+bad kernel can never replace the Mac's working boot files. Results go in an
+experiment report; see [Record an experiment](recording-an-experiment.md).
 
-## What is ready on this machine
+```mermaid
+flowchart LR
+    subgraph PC["Windows PC (controller)"]
+        usbipd["usbipd-win"]
+        subgraph WSL["Ubuntu WSL2"]
+            tools["./tools/asahi<br/>m1n1 Python proxy"]
+        end
+    end
+    subgraph Mac["Apple Silicon Mac (target)"]
+        m1n1["m1n1 proxy / HV"]
+        linux["Fedora Asahi<br/>kernel builds over SSH"]
+    end
+    usbipd -- "USB-C cable to ATC0<br/>/dev/m1n1, /dev/m1n1-sec" --> m1n1
+    tools -- "SSH over LAN" --> linux
+```
 
-As of 2026-10-13, SSH and passwordless sudo were verified against the M2 MacBook
-Air (J413). Its running `7.1.13-fairydust+` kernel, initramfs, symbols, and J413
-DTB matched the transferred bundle byte for byte. SSH is enabled at boot.
-The native source is `~/linux-fairydust` **on the Mac**. Local machine addresses,
-filesystem UUIDs, and SSH key paths are in ignored configuration/state, not the
-shared example file.
+Run host commands from a checkout of the `project` branch. Kernel source
+lives in a separate worktree **on the Mac**. `tools/asahi` needs Python 3.11
+or newer; m1n1's Python clients run through `uv` with Python 3.13 and m1n1's
+pinned dependencies.
 
-Validation on this machine now includes 37 passing host/PTY tests, live SSH
-and sudo checks, full baseline capture, a native build with a fresh release,
-candidate module installation, initramfs generation, and transfer/checksum
-validation. The candidate NVMe and Wi-Fi module version strings match its
-kernel release. Hashes of the installed baseline kernel, initramfs, config,
-symbols, and J413 DTB remained unchanged. Baseline bundles are preserved;
-the selected `tipd-oob-fixes` candidate has now passed HV boot, SSH, live
-USB-C/DP driver binding, and HV pause/context/resume checks. See
-[BRANCH_HV_TESTING.md](BRANCH_HV_TESTING.md) for its revision and results.
+## Prerequisites
 
-The baseline booted successfully under m1n1 HV. The SSH check verified the
-exact launch marker, expected kernel release, original Btrfs root, installed
-modules, and active SSH service. Interrupting into the HV shell, inspecting
-CPU context, and resuming also passed, with SSH verified again afterward.
-The graphical target and display manager were active and no systemd units
-failed; physical display output and individual peripherals have not been
-verified. The branch guide records the separately verified candidate results.
-Keep the Mac awake during long builds/transfers; temporary sleep inhibition
-was used during validation.
+- **A Mac that can boot m1n1 in proxy mode.** The usual way is a separate
+  m1n1 boot entry made by the Asahi installer: run `curl https://alx.sh | sh`
+  in macOS, enable expert mode, and choose the tethered (m1n1-only) option.
+  The other way is the stage-1 proxy backdoor on the existing Asahi install;
+  see [m1n1 overview](../research/m1n1-overview.md#2-install-m1n1) and the
+  [Asahi tethered boot guide](https://asahilinux.org/docs/sw/tethered-boot/).
+- **Ubuntu on WSL2 with systemd enabled.** `setup-host` starts
+  `systemd-udevd`. Check that `/etc/wsl.conf` contains `[boot]` and
+  `systemd=true`, then run `wsl --shutdown` from Windows if you changed it.
+- **A data-capable USB-C cable** from the PC to the Mac's rear port (ATC0,
+  next to MagSafe). The reason is recorded in
+  [decision 0002](../decisions/0002-proxy-on-atc0.md).
+- **m1n1 built on the PC** (default location `~/projects/m1n1`) and
+  [`uv`](https://docs.astral.sh/uv/getting-started/installation/) on PATH.
+- The Mac and PC on the same LAN, and the Mac kept awake during long builds
+  and transfers.
 
 ## One-time setup
 
@@ -65,9 +77,9 @@ sudo visudo -f /etc/sudoers.d/99-asahi-workflow
 Add `YOUR_USERNAME ALL=(root) NOPASSWD: ALL`, save, then check with
 `sudo -k` followed by `sudo -n whoami`. This gives the account full root
 access while the rule exists. Remove that file when the grant is no longer
-needed. The existing machine may instead use `99-codex-ssh`; do not add a
-second rule just to rename it. Passwords are entered in a local terminal,
-never stored in this repository or sent in chat.
+needed. If the Mac already has an equivalent rule under another file name,
+don't add a second one. Type passwords only into a local terminal; never
+store them in this repository or paste them into chat tools.
 
 ### 2. Configure WSL
 
@@ -84,7 +96,7 @@ Run **in Ubuntu WSL**, from this project:
 
 `init` creates `asahi.local.json` once. If it already exists, edit that file
 instead of running `init` again. It starts from the shape in
-[`asahi.example.json`](../asahi.example.json). `authorize` creates a dedicated
+[`asahi.example.json`](../../asahi.example.json). `authorize` creates a dedicated
 Ed25519 key if necessary and uses `ssh-copy-id` to send its **public** key to
 the separate Mac over the network. Enter the Mac's password when prompted.
 The private key stays on the WSL host.
@@ -113,8 +125,8 @@ in `asahi.local.json`, for example:
 }
 ```
 
-Set `LLDDIR` to the directory containing your working `ld.lld`; this machine
-uses the existing rust-lld shim. The preflight validates clang, linker,
+Set `LLDDIR` to the directory containing your working `ld.lld`; the original
+controller PC uses a rust-lld shim there. The preflight validates clang, linker,
 objcopy, and nm together. These host settings are separate from the remote
 kernel build's `make_args`.
 
@@ -188,8 +200,8 @@ From the WSL project:
 
 `session start` creates tmux windows named `serial` and `hv`. The UART
 recorder waits for USB, and the launcher waits up to 180 seconds for both
-the proxy and the recorder. Boot the Mac into its existing m1n1 proxy
-entry during that interval. Use `--wait 600` if you need longer.
+the proxy and the recorder. Boot the Mac into its m1n1 proxy entry (see
+[Prerequisites](#prerequisites)) during that interval. Use `--wait 600` if you need longer.
 The normal Asahi boot entry is not converted into a permanent test entry.
 
 For installations using m1n1's optional stage-1 backdoor, opening a serial
@@ -199,7 +211,7 @@ mode requires one-time recovery setup described in the
 The tools do not change recovery security settings or boot policy.
 
 In tmux, `Ctrl-b n` switches windows; `Ctrl-b d` detaches and leaves both
-controllers running. Closing the chat turn does not stop tmux. Keep WSL and
+controllers running. Closing your terminal does not stop tmux. Keep WSL and
 the Windows forwarding process alive. Stopping the HV controller while the
 guest runs can leave the guest stuck at its next trap.
 
@@ -217,6 +229,12 @@ pass as the HV test. Kernel errors and failed systemd services are collected
 in `guest-health.log` for review; the basic PASS does not certify every driver.
 If DHCP changes the address, edit `target` in `asahi.local.json` and retry.
 
+When the Mac powers off or its USB link drops, the HV controller exits with
+`SerialException: device reports readiness to read but returned no data`
+and the run's `boot.json` shows `"state": "exited"`. At the end of a run that
+is expected. In the middle of a run it means the USB link was lost; check the
+cable and the usbipd window.
+
 The guest uses the **same installed Asahi root filesystem and user data**.
 HV is a hardware debugging environment, not a separate VM disk. The launch
 keeps the ordinary root arguments and adds serial logging, `nokaslr` for
@@ -226,7 +244,7 @@ the inferred command line when an experiment needs it.
 ## Develop, build, stage, test
 
 For fetching a development branch at a pinned commit and testing USB-C/DP,
-follow [BRANCH_HV_TESTING.md](BRANCH_HV_TESTING.md). It includes the J413
+follow [the branch testing guide](branch-hv-testing.md). It includes the J413
 driver profile, initramfs inclusion, port selection, and live binding checks.
 
 ### Install native kernel build dependencies on the Mac
@@ -266,9 +284,10 @@ source/build directory:
 rustup component add rust-src
 ```
 
-The successful native candidate build used Clang/LLD **22.1.8**, rustup
-**rustc 1.99.0**, bindgen **0.72.1**, and pahole **1.32** on Fedora 44.
-The source commit was `ce9f2eba72c061a50b2d790450e90af3439d8c24`.
+The first successful native build used Clang/LLD **22.1.8**, rustup
+**rustc 1.99.0**, bindgen **0.72.1**, and pahole **1.32** on Fedora 44,
+from source commit `ce9f2eba72c061a50b2d790450e90af3439d8c24`
+([experiment](../experiments/2026-10-14-baseline-hv/)).
 These are the tested versions, not universal minimums. That source's
 `scripts/min-tool-version.sh` reports LLVM 15.0.0, rustc 1.85.0, and bindgen
 0.71.1 as minimums. Recheck the script and
@@ -323,6 +342,11 @@ source. A full captured baseline also preserves `.config` in its WSL bundle.
 Use the matching Asahi/fairydust source revision as the starting point; an
 arbitrary upstream revision may lack drivers used by this Mac. This source
 tree has no `arch/arm64/configs/asahi_defconfig`, so do not rely on that target.
+It does have the fragment `arch/arm64/configs/asahi.config`
+(`make LLVM=1 defconfig asahi.config`), which is how the
+[x86 cross-build guide](x86-cross-build-qemu.md) configures a kernel. A
+fragment-built config is not identical to the installed baseline, so prefer
+the baseline `.config` for anything you will boot.
 
 The following are checkpoints in the current J413/M2 configuration, **not
 a complete replacement for its saved `.config`**:
@@ -444,9 +468,9 @@ both debugger and HV shell.
 `hv.log`, `serial.log`, and (after checks) `check.json` and `guest-health.log`.
 The log relay preserves an interactive PTY for the HV shell. The serial
 recorder opens the secondary port exclusively and reconnects through USB resets.
-Detach from tmux rather than terminating it to hand a live run between you
-and an assistant. Say which experiment to run and which session is active;
-both use these same commands and local state.
+To hand a live run to a teammate or an AI assistant, detach from tmux
+rather than ending it, and say which experiment and session are active. Both
+use these same commands and local state.
 
 Run software checks without a Mac:
 
@@ -461,7 +485,10 @@ dry-run behavior, wrong-boot detection, and real PTY input/logging. They do not
 certify HV boot, suspend, GPU/display, USB-C alt mode, or Wi-Fi under a test
 kernel; record those outcomes for each hardware run.
 
-Generated bundles, logs, keys, and machine config stay out of Git. Commit the
-workflow scripts/docs and the kernel changes to the appropriate development
-branches. Large captures are local artifacts unless you explicitly choose a
-separate sharing destination.
+Generated bundles, logs, keys, and machine config stay out of Git. To
+publish a run, copy its records with `./tools/asahi evidence`, which redacts
+machine identifiers and sends free-text logs to the team's private evidence
+repository, and write an experiment report; see
+[Record an experiment](recording-an-experiment.md). Kernel changes go to
+development branches, never to `project`. Binaries that a teammate needs go to
+SharePoint `03 Large artifacts/<run-id>/`.

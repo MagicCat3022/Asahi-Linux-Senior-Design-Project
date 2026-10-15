@@ -1,0 +1,22 @@
+{
+  "checked": "20261014T034527961964Z",
+  "mode": "hv",
+  "passed": true,
+  "release": "7.1.13-fairydust-sdp-tipd-301e2ba4-20261014a",
+  "model": "Apple MacBook Air (13-inch, M2, 2022)",
+  "compatible": "apple,j413",
+  "cmdline": "root=UUID=<root-uuid> ro rootflags=subvol=root earlycon console=tty0 console=ttySAC0,1500000 rootwait nokaslr asahi_sdp.run=20261014T034242260652Z",
+  "root_uuid": "<root-uuid>",
+  "root_source": "/dev/nvme0n1p8[/root]",
+  "root_fstype": "btrfs",
+  "root_options": "rw,relatime,seclabel,compress=zstd:1,ssd,discard=async,space_cache=v2,subvolid=256,subvol=/root",
+  "efi_partuuid": "<efi-partuuid>",
+  "boot_id": "<uuid-1>",
+  "ssh_enabled": "enabled",
+  "ssh_active": "active",
+  "modules_present": true,
+  "sudo": true,
+  "boot_artifacts_available": false,
+  "kernel_config": {},
+  "artifact_sha256": {}
+}

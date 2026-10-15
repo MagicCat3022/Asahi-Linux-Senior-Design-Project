@@ -1,4 +1,9 @@
-# m1n1: Setup and Basic Hardware Inspection
+# m1n1: setup and basic hardware inspection
+
+**Written:** October 2026 · How m1n1's proxy and hypervisor modes work, and how
+to read hardware registers through them. To run the team's HV test loop, follow
+the [kernel workflow guide](../guides/kernel-workflow.md), which automates the
+host setup below.
 
 ```text
 Development host                         Apple Silicon Mac
@@ -31,7 +36,7 @@ There is no macOS or Linux driver running at the same time.
 
 In hypervisor mode, m1n1 runs underneath a guest operating system such as macOS or Linux.
 
-This is the mode we will use when observeing driver behavior. m1n1 can trace hardware accesses when the OS responds to events such as connecting a USB-C display.
+This is the mode we use to observe driver behavior. m1n1 can trace hardware accesses when the OS responds to events such as connecting a USB-C display.
 
 ## 2. Install m1n1
 
@@ -81,7 +86,7 @@ cd m1n1
 
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install pyserial construct serial.tool
+python -m pip install -r requirements.txt
 
 rustup target add aarch64-unknown-none-softfloat
 

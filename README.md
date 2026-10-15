@@ -3,6 +3,18 @@
 [![Sync upstream kernel branches](https://github.com/MagicCat3022/Asahi-Linux-Senior-Design-Project/actions/workflows/sync-upstream.yml/badge.svg?branch=project)](https://github.com/MagicCat3022/Asahi-Linux-Senior-Design-Project/actions/workflows/sync-upstream.yml)
 
 Senior design fork of [AsahiLinux/linux](https://github.com/AsahiLinux/linux), including the [fairydust branch](https://github.com/AsahiLinux/linux/tree/fairydust).
+The project aims to improve USB-C DisplayPort support on M1/M2 Macs; see the
+[proposal](deliverables/proposal/).
+
+## Where things are
+
+| Path | Contents |
+| --- | --- |
+| [docs/](docs/README.md) | Guides, reference, research, experiment reports, failure catalogue, decisions, weekly status; start at [docs/README.md](docs/README.md) |
+| [deliverables/](deliverables/README.md) | Sources for course reports |
+| [tools/](tools/), [tests/](tests/) | The WSL/m1n1 HV workflow (`./tools/asahi`) and its tests |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Branches, pull requests, and checks |
+| [AGENTS.md](AGENTS.md) | Rules for AI coding assistants working in this repo |
 
 ## Branches
 
@@ -15,7 +27,7 @@ Senior design fork of [AsahiLinux/linux](https://github.com/AsahiLinux/linux), i
 
 The default `project` branch has its own history and contains no kernel source. Select a kernel branch above to browse or build the kernel. Keeping automation on `project` lets the three tracked branches retain upstream's exact commits.
 
-Put project notes and research in this branch. Create development branches from the appropriate kernel branch for code changes, for example `work/fairydust-usb`. Open code pull requests against the team's development branch, not the upstream-tracking branches or the documentation-only `project` branch.
+Put project notes and research in this branch, following [docs/README.md](docs/README.md). Create development branches from the appropriate kernel branch for code changes, for example `work/fairydust-usb`. Open code pull requests against the team's development branch, not the upstream-tracking branches or the documentation-only `project` branch.
 
 ## Daily upstream sync
 
@@ -33,7 +45,7 @@ Scheduled runs can be delayed by GitHub. GitHub also disables schedules in publi
 
 ## Start kernel development
 
-Use Linux, or a WSL2 Linux filesystem, for a kernel checkout and build. For work based on fairydust:
+Clone kernel source onto Linux, the WSL2 Linux filesystem, or the test Mac. Kernels you boot on hardware are built on the Mac; see [decision 0003](docs/decisions/0003-native-builds-on-mac.md). For work based on fairydust:
 
 ```sh
 git clone --single-branch --branch fairydust \
@@ -58,7 +70,9 @@ Resolve any conflicts and test before pushing. Upstream history rewrites may req
 
 ## Edit project documentation
 
-For a small checkout of the documentation and automation branch:
+Read [docs/README.md](docs/README.md) for where each kind of document goes and
+[CONTRIBUTING.md](CONTRIBUTING.md) for the pull-request workflow. For a small
+checkout of the documentation and automation branch:
 
 ```sh
 git clone --single-branch --branch project \
@@ -68,14 +82,15 @@ git clone --single-branch --branch project \
 
 ## WSL, SSH, and m1n1 hypervisor workflow
 
-See [Kernel development and HV testing](docs/KERNEL_WORKFLOW.md) for Windows USB
+See [Kernel development and HV testing](docs/guides/kernel-workflow.md) for Windows USB
 forwarding, SSH setup, native Mac kernel builds, candidate module staging,
 baseline recovery, and persistent serial/HV sessions that a developer or
 assistant can operate with the same tools.
 
-See [Development branches and USB-C/DP testing](docs/BRANCH_HV_TESTING.md)
+See [Development branches and USB-C/DP testing](docs/guides/branch-hv-testing.md)
 for pinned branch builds, the J413 driver profile, required Mac port selection,
-and driver readiness checks before display hotplug testing.
+and driver readiness checks before display hotplug testing. Record results
+with [Record an experiment](docs/guides/recording-an-experiment.md).
 
 ```sh
 ./tools/asahi doctor --online
