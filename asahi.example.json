@@ -2,7 +2,7 @@
   "schema": 1,
   "target": "YOUR_USERNAME@MAC_IP",
   "identity": "~/.ssh/asahi_hv",
-  "m1n1_dir": "~/projects/m1n1",
+  "m1n1_dir": "~/Github/m1n1",
   "build_source": "~/linux-fairydust",
   "make_args": ["LLVM=1"],
   "proxy_env": {},

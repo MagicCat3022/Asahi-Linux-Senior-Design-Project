@@ -1,10 +1,9 @@
 # Set up the controller PC
 
 **Applies to:** Windows 11 with Ubuntu on WSL2, usbipd-win 5.x, m1n1
-`ce2b8a43` · **Last verified:** 2026-10-14 on `PC-01` with `MAC-01`, except
-that `PC-01` builds m1n1 with Clang ([below](#if-the-m1n1-build-fails)) and
-hasn't run the GNU build in step 4; see
-[2026-10-14-baseline-hv](../experiments/2026-10-14-baseline-hv/)
+`ce2b8a43` · **Last verified:** 2026-10-14 on `PC-01` with `MAC-01`, using
+the [Clang build of m1n1](#if-the-m1n1-build-fails) rather than step 4's GNU
+build; see [2026-10-14-baseline-hv](../experiments/2026-10-14-baseline-hv/)
 
 Do this once per PC, after [setting up the test Mac](set-up-the-test-mac.md).
 It ends with your first hypervisor boot of the Mac's own kernel, which proves
@@ -56,9 +55,9 @@ If you changed it, run `wsl --shutdown` in PowerShell and reopen Ubuntu.
 git clone --single-branch --branch project \
   https://github.com/MagicCat3022/Asahi-Linux-Senior-Design-Project.git \
   ~/Github/Asahi-Linux-Senior-Design-Project
-git clone --recursive https://github.com/AsahiLinux/m1n1.git ~/projects/m1n1
-git -C ~/projects/m1n1 checkout ce2b8a43cea4220b602af1005dc9dbfc59c9624e
-git -C ~/projects/m1n1 submodule update --init
+git clone --recursive https://github.com/AsahiLinux/m1n1.git ~/Github/m1n1
+git -C ~/Github/m1n1 checkout ce2b8a43cea4220b602af1005dc9dbfc59c9624e
+git -C ~/Github/m1n1 submodule update --init
 cd ~/Github/Asahi-Linux-Senior-Design-Project
 ```
 
@@ -94,7 +93,7 @@ go. They need a built m1n1 and an ARM64 toolchain (installed by
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh   # skip if you have rustup
 rustup target add aarch64-unknown-none-softfloat
-make -C ~/projects/m1n1
+make -C ~/Github/m1n1
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
@@ -104,7 +103,7 @@ package versions m1n1 lists, without touching the system Python.
 ### If the m1n1 build fails
 
 `PC-01` uses Clang and LLD instead of the GNU tools. To do the same, build
-with `make -C ~/projects/m1n1 USE_CLANG=1 TOOLCHAIN=/usr/lib/llvm-22/bin/`
+with `make -C ~/Github/m1n1 USE_CLANG=1 TOOLCHAIN=/usr/lib/llvm-22/bin/`
 and set `proxy_env` in `asahi.local.json` as shown in the
 [tool reference](../reference/asahi-tool.md#m1n1-toolchain-on-the-pc).
 
@@ -140,8 +139,8 @@ winget install --interactive --exact dorssel.usbipd-win
 ```
 
 Connect the cable from the PC to the Mac's **ATC0** port: the rear USB-C port,
-next to MagSafe on the MacBook Air M2
-([decision 0002](../decisions/0002-proxy-on-atc0.md) explains why). Power the
+next to MagSafe on the MacBook Air M2 (see
+[port setup](test-a-kernel.md#use-the-right-usb-c-port)). Power the
 Mac off, then hold the power button until startup options appear, and pick
 the m1n1 entry. Then, in **PowerShell as administrator**:
 

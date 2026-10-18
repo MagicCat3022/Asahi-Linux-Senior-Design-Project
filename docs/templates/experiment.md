@@ -1,51 +1,51 @@
 # YYYY-MM-DD: Short experiment title
 
-<!-- Folder: docs/experiments/YYYY-MM-DD-slug/ (UTC date of the first run).
-     Steps: docs/guides/recording-an-experiment.md -->
+<!-- ./tools/asahi evidence starts this file for you, with Inputs and the
+     automated Results filled in. Steps: docs/guides/recording-an-experiment.md -->
 
-**Author:** NAME · **Runs:** `YYYYMMDDTHHMMSS…Z` · **Status:** draft | final
+**Author:** NAME · **Runs:** `RUN_ID` · **Status:** draft | final
 
 ## Goal
 
-One or two sentences: the question this run answers. Link the failure entries
-it targets, e.g. [F-001](../../failures/F-001-slug.md).
+One or two sentences: the question this run answers, and the failure entries
+it targets, if any.
 
 ## Inputs
 
 | Input | Value |
 | --- | --- |
-| Kernel commit | full 40-character hash (branch name) |
+| Kernel commit | Full commit hash and the source folder it was built from |
 | Kernel release | `7.1.13-fairydust-sdp-…` |
-| Config | SHA-256 of `.config`; changes from the baseline, if any |
+| Config | SHA-256 of `.config`; changes from the baseline |
 | Driver profile | `j413-usbc-dp` or none |
-| Toolchain | clang, rustc, bindgen versions (from `.config`) |
-| m1n1 commit | from `boot.json` |
-| Guide followed | [guide name](../../guides/…) at project commit `…` |
+| Toolchain | Versions from `build.json`, or "not recorded" |
+| m1n1 commit | From `boot.json` |
+| Project commit | The commits whose tools built and booted the kernel |
+| Exact inputs (private) | Archives kept, and any that are unavailable; links in `evidence/RUN_ID/logs.md` |
 | Hardware | `MAC-01`; proxy on ATC0; `MON-01` via `CAB-01` on ATC1 |
 
 ## Procedure
 
-Link the guide. List only what you did differently from it, plus any
-physical actions, e.g. "unplugged `CAB-01` at T+60 s, replugged at T+75 s".
+Followed [Test a kernel](../../guides/test-a-kernel.md). List only what you
+did differently, plus any physical actions, e.g. "unplugged `CAB-01` at
+T+60 s, replugged at T+75 s".
 
 ## Results
 
 | Check | Result | How | Evidence |
 | --- | --- | --- | --- |
-| HV boot, exact run marker, release, root | PASS | automated | [check.json](evidence/RUN_ID/check.json) |
-| Driver binding (live) | PASS | automated | [driver-check](evidence/RUN_ID/driver-check-STAMP.json) |
+| HV boot: run marker, release, root, modules, SSH | PASS | automated | [check.json](evidence/RUN_ID/check.json) |
 | External display shows image | NOT TESTED | — | no monitor attached |
-| Hotplug ×10 | FAIL 3/10 | manual | notes below, [serial.log](https://github.com/MagicCat3022/asahi-sdp-evidence/blob/main/SLUG/RUN_ID/serial.log) *(private)* |
+| Hot-plug ×10 | FAIL 3/10 | manual | Observations, below |
 
-Use only PASS, FAIL, NOT TESTED, or BLOCKED. "Automated" means a tool wrote
-the evidence file; "manual" means a person observed it.
-Logs live in the private evidence repository; each run's `evidence/RUN_ID/logs.md`
-lists their links.
+Use only PASS, FAIL, NOT TESTED, or BLOCKED. **Automated** means a tool
+performed the check; **manual** means a person observed it, so name the
+observer and time in Observations.
 
 ## Observations
 
-What happened that the table doesn't show: log excerpts (short, with file and
-line), timing, surprises.
+What happened that the table doesn't show: short log excerpts with file and
+line, timing, surprises. Quoted lines become public, so read them first.
 
 ## Conclusion
 

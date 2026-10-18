@@ -1,31 +1,31 @@
 # Record an experiment
 
 **Applies to:** any hardware run made with `./tools/asahi` ·
-**Last verified:** 2026-10-14, by rebuilding the two existing experiment reports
+**Last verified:** 2026-10-18 with the tool's unit tests; not yet on a new
+hardware run
 
-Every hardware run you might cite later, whether it passed or failed, becomes
-an experiment report. The reports are the raw material for the failure
-catalogue, the before/after failure rates, and the final report.
-
-## Where evidence goes
-
-This repository is public and, as a fork, can't be made private. So evidence
-is split ([decision 0004](../decisions/0004-private-evidence-repository.md)):
+Every hardware run you might cite later, pass or fail, becomes an experiment
+report. Two commands do most of the work: `evidence` copies the run's
+records and starts the report, and `evidence --finalize` publishes the
+private logs and pins links to them. You fill in what only a person knows.
 
 ```mermaid
 flowchart LR
-    run[".asahi/runs/RUN_ID/<br/>on your PC"] --> ev["./tools/asahi evidence<br/>redacts identifiers"]
-    ev -- "JSON records" --> pub["This repository<br/>docs/experiments/SLUG/evidence/RUN_ID/"]
-    ev -- "logs" --> priv["Private repository<br/>asahi-sdp-evidence/SLUG/RUN_ID/"]
-    pub -- "logs.md links to" --> priv
-    report["Report<br/>docs/experiments/SLUG/README.md"] -- "links" --> pub
+    run["Run a test<br/>(Test a kernel)"] --> ev["evidence<br/>copies records, starts the report"]
+    ev --> read["You read the files<br/>and fill in the report"]
+    read --> fin["evidence --finalize<br/>pushes private logs, pins links"]
+    fin --> pr["check-docs, pull request"]
 ```
 
-| Evidence | Where | Why |
-| --- | --- | --- |
-| Reports and structured records (`boot.json`, `check.json`, driver checks, build summary) | This repository, `docs/experiments/SLUG/evidence/RUN_ID/` | Known fields, so redaction is reliable |
-| Free-text logs (`serial.log`, `hv.log`, `guest-health.log`) | Private repository [`MagicCat3022/asahi-sdp-evidence`](https://github.com/MagicCat3022/asahi-sdp-evidence), `SLUG/RUN_ID/` | Logs can contain identifiers nobody knew to look for |
-| Binaries (kernel images, initramfs, ADT dumps) | Nowhere, or SharePoint `03 Large artifacts/RUN_ID/` if a teammate needs one | Large, and recreatable from the build record |
+## Where evidence goes
+
+This repository is public, so `evidence` splits a run in two:
+
+| What | Where |
+| --- | --- |
+| The report and structured records (`boot.json`, `check.json`, driver checks, build summary), with identifiers redacted | This repository, `docs/experiments/SLUG/` |
+| Logs (`serial.log`, `hv.log`, `guest-health.log`), the exact config, and source and workflow snapshots | The private [`asahi-sdp-evidence`](https://github.com/MagicCat3022/asahi-sdp-evidence) repository, `SLUG/RUN_ID/` |
+| Binaries (kernel images, initramfs, ADT dumps) | Neither; local bundles, or SharePoint `03 Large artifacts/RUN_ID/` |
 
 ## One-time setup
 
@@ -36,105 +36,78 @@ Ask the repository owner to add you as a collaborator on
 git clone https://github.com/MagicCat3022/asahi-sdp-evidence.git ~/Github/asahi-sdp-evidence
 ```
 
-Check that `asahi.local.json` has these settings (`./tools/asahi init` adds
-them; for an older config, add them by hand):
-
-```json
-"private_evidence_dir": "~/Github/asahi-sdp-evidence",
-"private_evidence_url": "https://github.com/MagicCat3022/asahi-sdp-evidence"
-```
+`./tools/asahi init` points `asahi.local.json` at that folder; see
+[configuration](../reference/asahi-tool.md#configuration).
 
 ## 1. Before the run
 
-Pick a short slug and today's UTC date (the date in the run IDs), then copy
-the template:
-
-```bash
-mkdir -p docs/experiments/2026-10-21-hotplug-baseline
-cp docs/templates/experiment.md docs/experiments/2026-10-21-hotplug-baseline/README.md
-```
-
-Fill in **Goal** and **Inputs** now, while you know them: kernel commit,
-config hash, driver profile, m1n1 commit, the guide you're following, and
-hardware IDs from [the inventory](../reference/hardware.md). Add any new
-cable, monitor, or adapter to the inventory first.
+Pick a short slug. The folder name is the UTC date of the first run plus the
+slug, e.g. `docs/experiments/2026-10-21-hotplug-baseline/`. Add any new cable,
+monitor, or adapter to [the hardware inventory](../reference/hardware.md).
 
 ## 2. Run it
 
-Follow [Test a kernel](test-a-kernel.md). While it runs, note anything physical the tools
-can't see, such as "unplugged `CAB-02` at about 14:05, replugged 15 s later",
-and what you saw on screen. These become **manual** results.
+Follow [Test a kernel](test-a-kernel.md). Write down anything physical the
+tools can't see, with the time: "unplugged `CAB-02` at about 14:05, replugged
+15 s later", and what was on screen. These become **manual** results.
 
 ## 3. Copy the evidence
 
-For each run that belongs to the experiment:
+**PC:**
 
 ```bash
 git -C ~/Github/asahi-sdp-evidence pull
-./tools/asahi evidence docs/experiments/2026-10-21-hotplug-baseline/evidence \
-  --run-dir .asahi/runs/RUN_ID
+./tools/asahi evidence docs/experiments/2026-10-21-hotplug-baseline/evidence
 ```
 
-Without `--run-dir` it uses the latest run. `./tools/asahi status` reminds
-you when the latest checked run isn't in any report yet. The command:
+This uses the latest run; add `--run-dir .asahi/runs/RUN_ID` for another one.
+It copies the records and logs, and starts `README.md` from
+[the template](../templates/experiment.md) with **Inputs** and the automated
+**Results** filled in. For a second run in the same experiment, it prints
+the rows to add instead of touching the report.
 
-- writes the run's JSON records, the same-kernel `driver-check` reports taken
-  during the run, and a build summary to `evidence/RUN_ID/` in this
-  repository;
-- writes the run's logs to `~/Github/asahi-sdp-evidence/2026-10-21-hotplug-baseline/RUN_ID/`;
-- writes `evidence/RUN_ID/logs.md`, linking each private log;
-- prints the `git` command that commits and pushes the private logs. Run it,
-  so the links work for your teammates.
-
-Add a report taken before the boot with
-`--driver-check .asahi/driver-checks/FILE.json`. If you don't have the private
-repository, `--skip-logs` publishes only the structured records.
-
-Everything is redacted, private logs included, in case a file is ever moved
-or quoted. The command replaces home and project paths, the Mac's user and
-hostname, device serial numbers, UUIDs, machine IDs, and MAC addresses. The
-same value always gets the same placeholder, such as `<root-uuid>` or
-`<uuid-2>`, so records still line up. Then check the public part for anything
-it couldn't know about:
+**Read what it wrote** before going on, including the private copies. The
+tool redacts paths, the Mac's user and hostname, serial numbers, UUIDs,
+machine IDs, and MAC addresses, but it can't know about everything:
 
 ```bash
-grep -rniE "password|token|ssid|@" docs/experiments/2026-10-21-hotplug-baseline/evidence | less
+grep -rniE "password|token|ssid|@" docs/experiments/2026-10-21-hotplug-baseline | less
 ```
 
-In the report, link logs by their private URL and mark them *(private)*.
-Quote the few lines that matter directly in the report's **Observations**;
-quoted lines are public, so read them first.
+Without access to the private repository, add `--skip-logs` and say in the
+report that logs and inputs weren't archived.
 
-## 4. Write the results
+## 4. Fill in the report
 
-Fill in **Results** with one row per check. Use only **PASS**, **FAIL**,
-**NOT TESTED**, or **BLOCKED**. Mark each row **automated** (a tool wrote the
-evidence file) or **manual** (a person observed it), and link the evidence
-file. List what you didn't test as clearly as what passed.
+Replace every `FILL IN` (`check-docs.py` fails while any is left). Write the
+**Goal** and **Procedure**, add a row for each manual check with who observed
+it and when, and say plainly what you didn't test. Results use only
+**PASS**, **FAIL**, **NOT TESTED**, or **BLOCKED**; for repeated tests, give
+the rate, as in "FAIL 3/10". Quote the few log lines that matter in
+**Observations**. Quoted lines become public, so read them first.
 
-For repeated tests, give the rate: "FAIL 3/10".
+## 5. Publish the private evidence
 
-## 5. Update the failure catalogue
-
-If the run reproduced, ruled out, or helped explain a failure:
-
-- add a row to that entry's **Evidence** table;
-- change its **Status** if warranted (for example `upstream-reported` →
-  `reproduced`), with a line in its **History**;
-- update the table in [failures/README.md](../failures/README.md).
-
-If you found a new failure, copy [the failure template](../templates/failure.md)
-to the next free `F-NNN`.
-
-## 6. Index and submit
-
-Make sure the private logs are pushed, add a row to
-[experiments/README.md](../experiments/README.md), run the checks, and open a
-pull request to `project` within a week of the run:
+**PC:**
 
 ```bash
-python3 tools/check-docs.py
+./tools/asahi evidence docs/experiments/2026-10-21-hotplug-baseline/evidence --finalize
 ```
 
-After the report is merged it is frozen. If you later find a mistake, add a
-dated line under **Corrections** instead of editing the results.
+It lists the run's private files and asks before committing and pushing just
+that folder. It then checks the pushed bytes against the copies and rewrites
+`evidence/RUN_ID/logs.md` with links pinned to that commit. The report
+already links to `logs.md`, so there is nothing to copy.
+
+## 6. Failures, index, pull request
+
+- If the run reproduced or explained a failure, update its entry in the
+  [failure catalogue](../failures/README.md); if it found a new one, add one.
+- Add a row to [experiments/README.md](../experiments/README.md).
+- Run `python3 tools/check-docs.py` and open a pull request to `project`.
+
+Once merged, the report is frozen. Fix a mistake with a dated line under
+**Corrections**.
+
+To rebuild a kernel from the private archives, see
+[rebuilding from preserved inputs](../reference/asahi-tool.md#rebuilding-from-preserved-inputs).

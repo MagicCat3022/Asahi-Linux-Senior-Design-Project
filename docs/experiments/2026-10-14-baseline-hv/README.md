@@ -1,8 +1,7 @@
 # 2026-10-14: Installed baseline kernel under m1n1 HV
 
 **Author:** Mustafa Maras · **Runs:** `20261013T235111448825Z`, `20261014T013041090133Z`,
-`20261014T014030194466Z` · **Status:** final (reconstructed from run records
-on 2026-10-14)
+`20261014T014030194466Z` · **Status:** final
 
 Links marked *(private)* go to the team's private evidence repository; see
 [Record an experiment](../../guides/recording-an-experiment.md#3-copy-the-evidence).
@@ -23,6 +22,7 @@ on the front port.
 | Driver profile | none for the boot; `j413-usbc-dp` for the driver checks |
 | m1n1 commit | `ce2b8a43cea4220b602af1005dc9dbfc59c9624e` |
 | Guide followed | [kernel workflow](https://github.com/MagicCat3022/Asahi-Linux-Senior-Design-Project/blob/07324248e65a99e39b99240519058a00db5ebf7c/docs/KERNEL_WORKFLOW.md) as of project commit `07324248e65a` |
+| Exact inputs (private) | `kernel.config` for each run, linked from its `logs.md`; source and workflow snapshots weren't captured |
 | Hardware | `MAC-01`; proxy cable on **ATC1** (front port, iodev 5); `PC-01`; no external display |
 
 ## Procedure
@@ -45,10 +45,10 @@ local in `.asahi/builds/`.
 | Check | Result | How | Evidence |
 | --- | --- | --- | --- |
 | Normal boot: release, root, modules, SSH, sudo | PASS | automated | [check.json](evidence/20261013T235111448825Z/check.json) |
-| First HV attempt | FAIL: chainloader stopped; host `aarch64-linux-gnu-gcc` missing | automated | [hv.log](https://github.com/MagicCat3022/asahi-sdp-evidence/blob/main/2026-10-14-baseline-hv/20261014T013041090133Z/hv.log) *(private)*, [adt-repair.json](evidence/20261014T013041090133Z/adt-repair.json) |
+| First HV attempt | FAIL: chainloader stopped; host `aarch64-linux-gnu-gcc` missing | automated | [hv.log](https://github.com/MagicCat3022/asahi-sdp-evidence/blob/23a591e8074eeb0e4f779724dc350d549bcd278e/2026-10-14-baseline-hv/20261014T013041090133Z/hv.log) *(private)*, [adt-repair.json](evidence/20261014T013041090133Z/adt-repair.json) |
 | HV boot: exact run marker, release, root UUID, modules, SSH | PASS | automated | [check.json](evidence/20261014T014030194466Z/check.json) |
 | HV interrupt, `ctx`, resume; SSH after resume | PASS | manual | [control-check.json](evidence/20261014T014030194466Z/control-check.json) |
-| Graphical target and display manager active; no failed units | PASS | manual | [control-check.json](evidence/20261014T014030194466Z/control-check.json), [guest-health.log](https://github.com/MagicCat3022/asahi-sdp-evidence/blob/main/2026-10-14-baseline-hv/20261014T014030194466Z/guest-health.log) *(private)* |
+| Graphical target and display manager active; no failed units | PASS | manual | [control-check.json](evidence/20261014T014030194466Z/control-check.json), [guest-health.log](https://github.com/MagicCat3022/asahi-sdp-evidence/blob/23a591e8074eeb0e4f779724dc350d549bcd278e/2026-10-14-baseline-hv/20261014T014030194466Z/guest-health.log) *(private)* |
 | USB-C/DP driver readiness, proxy on ATC1 (first check) | FAIL: profile expected module `i2c-apple`, but `CONFIG_I2C_APPLE` builds `i2c-pasemi-platform`; front PHY unbound | automated | [driver-check 031544](evidence/20261014T014030194466Z/driver-check-20261014T031544041901Z.json) |
 | USB-C/DP driver readiness, proxy on ATC1 (corrected profile) | FAIL: front PHY and external DCP unbound; DCP deferred | automated | [driver-check 031828](evidence/20261014T014030194466Z/driver-check-20261014T031828184009Z.json) |
 | Native build and staging leave installed boot files unchanged | PASS | automated | local build/stage records |
@@ -57,24 +57,24 @@ local in `.asahi/builds/`.
 ## Observations
 
 - With the proxy on ATC1, m1n1 logged `Initializing hypervisor over iodev 5`
-  ([hv.log](https://github.com/MagicCat3022/asahi-sdp-evidence/blob/main/2026-10-14-baseline-hv/20261014T014030194466Z/hv.log) *(private)*, line 120) and removed
+  ([hv.log](https://github.com/MagicCat3022/asahi-sdp-evidence/blob/23a591e8074eeb0e4f779724dc350d549bcd278e/2026-10-14-baseline-hv/20261014T014030194466Z/hv.log) *(private)*, line 120) and removed
   `atc-phy1` from the guest. The DCP driver then logged
   `apple-dcp 271c00000.dcp: Failed to get dp-phy: -517` repeatedly
-  ([guest-health.log](https://github.com/MagicCat3022/asahi-sdp-evidence/blob/main/2026-10-14-baseline-hv/20261014T014030194466Z/guest-health.log) *(private)*).
+  ([guest-health.log](https://github.com/MagicCat3022/asahi-sdp-evidence/blob/23a591e8074eeb0e4f779724dc350d549bcd278e/2026-10-14-baseline-hv/20261014T014030194466Z/guest-health.log) *(private)*).
   `-517` is `-EPROBE_DEFER`: DCP waits forever for a PHY it can't have.
 - The baseline initramfs (about 45 MiB) fits m1n1's default 128 MiB upload
   heap.
 - Run `014030` ended with a clean power-off (`reboot: Power down` in
-  [serial.log](https://github.com/MagicCat3022/asahi-sdp-evidence/blob/main/2026-10-14-baseline-hv/20261014T014030194466Z/serial.log) *(private)*), after which the HV
+  [serial.log](https://github.com/MagicCat3022/asahi-sdp-evidence/blob/23a591e8074eeb0e4f779724dc350d549bcd278e/2026-10-14-baseline-hv/20261014T014030194466Z/serial.log) *(private)*), after which the HV
   controller exited with a serial `SerialException`. That is the expected end
-  of a run; see the kernel workflow guide.
+  of a run; see [Shut down](../../guides/test-a-kernel.md#5-shut-down).
 
 ## Conclusion
 
 The workflow boots the installed kernel under HV with the original root, and
 the identity check can tell an HV boot from a normal one. The proxy can't
 share the port that fairydust uses for DP on J413, so DP tests need the proxy
-on ATC0; see [decision 0002](../../decisions/0002-proxy-on-atc0.md).
+on ATC0; see [port setup](../../guides/test-a-kernel.md#use-the-right-usb-c-port).
 
 Tool changes that came out of this session: a host toolchain preflight before
 the target is touched (from the first HV attempt), a Rust support preflight

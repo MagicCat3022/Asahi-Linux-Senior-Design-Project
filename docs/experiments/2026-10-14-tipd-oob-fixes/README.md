@@ -1,8 +1,7 @@
 # 2026-10-14: tipd-oob-fixes candidate under m1n1 HV
 
 **Author:** Mustafa Maras · **Runs:** `20261014T033657656493Z`, `20261014T034242260652Z`,
-`20261014T035050128076Z` · **Status:** final (reconstructed from run records
-on 2026-10-14)
+`20261014T035050128076Z` · **Status:** final
 
 Links marked *(private)* go to the team's private evidence repository; see
 [Record an experiment](../../guides/recording-an-experiment.md#3-copy-the-evidence).
@@ -11,8 +10,8 @@ Links marked *(private)* go to the team's private evidence repository; see
 
 Check that the `tipd-oob-fixes` branch builds, boots under the m1n1 HV, and
 brings up the whole USB-C/DP driver stack on the front port (ATC1), so it is
-ready for hot-plug testing with a monitor. Related failures:
-[F-002](../../failures/F-002-cd321x-no-dp-after-usb-failure.md) (same driver).
+ready for hot-plug testing with a monitor. Related upstream background:
+[#634](https://github.com/AsahiLinux/linux/issues/634) (same driver).
 
 ## Inputs
 
@@ -27,6 +26,7 @@ ready for hot-plug testing with a monitor. Related failures:
 | Toolchain | Clang/LLD 22.1.8, rustc 1.99.0, bindgen 0.72.1, pahole 1.32, Fedora 44 |
 | m1n1 commit | `ce2b8a43cea4220b602af1005dc9dbfc59c9624e` |
 | Guide followed | [branch testing guide](https://github.com/MagicCat3022/Asahi-Linux-Senior-Design-Project/blob/07324248e65a99e39b99240519058a00db5ebf7c/docs/BRANCH_HV_TESTING.md) as of project commit `07324248e65a` |
+| Exact inputs (private) | `kernel.config` for each run, linked from its `logs.md`; source and workflow snapshots weren't captured |
 | Hardware | `MAC-01`; proxy on ATC1 for the first run, **ATC0** (iodev 4) for the others; `PC-01`; no external display |
 
 ## Procedure
@@ -45,10 +45,10 @@ shortcut.
 | --- | --- | --- | --- |
 | Build and stage: 5,805 modules; all 11 profile modules in the initramfs | PASS | automated | [build.json](evidence/20261014T035050128076Z/build.json); local stage record |
 | Pre-boot module check: `vermagic` and dependencies | PASS | automated | [driver-check 033612](evidence/20261014T033657656493Z/driver-check-20261014T033612146432Z.json) |
-| HV boot, proxy on ATC1, default 128 MiB upload heap | FAIL: `Exception: Out of memory` loading the 183 MiB initramfs | automated | [hv.log](https://github.com/MagicCat3022/asahi-sdp-evidence/blob/main/2026-10-14-tipd-oob-fixes/20261014T033657656493Z/hv.log) *(private)*, line 277 |
+| HV boot, proxy on ATC1, default 128 MiB upload heap | FAIL: `Exception: Out of memory` loading the 183 MiB initramfs | automated | [hv.log](https://github.com/MagicCat3022/asahi-sdp-evidence/blob/23a591e8074eeb0e4f779724dc350d549bcd278e/2026-10-14-tipd-oob-fixes/20261014T033657656493Z/hv.log) *(private)*, line 277 |
 | HV boot, proxy on ATC0, 512 MiB heap: run marker, release, root, modules, SSH | PASS | automated | [check.json](evidence/20261014T034242260652Z/check.json) |
 | Live DP driver readiness (same run) | PASS | automated | [driver-check 034500](evidence/20261014T034242260652Z/driver-check-20261014T034500010230Z.json) |
-| HV interrupt keeps the controller alive (same run) | FAIL: Ctrl-C also stopped the launcher; exit code 130 | automated | [boot.json](evidence/20261014T034242260652Z/boot.json), [hv.log](https://github.com/MagicCat3022/asahi-sdp-evidence/blob/main/2026-10-14-tipd-oob-fixes/20261014T034242260652Z/hv.log) *(private)* |
+| HV interrupt keeps the controller alive (same run) | FAIL: Ctrl-C also stopped the launcher; exit code 130 | automated | [boot.json](evidence/20261014T034242260652Z/boot.json), [hv.log](https://github.com/MagicCat3022/asahi-sdp-evidence/blob/23a591e8074eeb0e4f779724dc350d549bcd278e/2026-10-14-tipd-oob-fixes/20261014T034242260652Z/hv.log) *(private)* |
 | Final run with fixed launcher: run marker, release, root, modules, SSH | PASS | automated | [check.json](evidence/20261014T035050128076Z/check.json) |
 | Final run: front PHY, crossbar, external DCP, display subsystem bound; no deferred devices; `DP-1` disconnected; `eDP-1` 2560x1600 | PASS | automated | [driver-check 035323](evidence/20261014T035050128076Z/driver-check-20261014T035323279519Z.json) |
 | Final run: HV interrupt, `ctx`, resume; SSH after resume; controller alive | PASS | manual | [control-check.json](evidence/20261014T035050128076Z/control-check.json) |
@@ -88,5 +88,4 @@ here confirms or rules out any failure entry.
 
 ## Corrections
 
-- 2026-10-14: the original guide gave the initramfs size as 184 MiB; it is
-  191,977,784 bytes (183 MiB).
+None.

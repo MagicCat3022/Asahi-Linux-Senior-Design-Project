@@ -67,7 +67,9 @@ exit
 - If the folder already exists, look at it before reusing it. Don't reset a
   worktree that has someone else's changes in it.
 - To write code rather than test a pushed branch, make a branch in the
-  worktree: `git -C "$tree" switch -c work/your-change`.
+  worktree: `git -C "$tree" switch -c usb/your-change`. For new work, start
+  from `usb/dev` and target kernel pull requests there; see
+  [branches and sync](../reference/branches-and-sync.md#start-a-kernel-branch).
 - Read the kernel tree's own instructions before editing it, and see
   [CONTRIBUTING](../../CONTRIBUTING.md#upstream-contributions-and-ai-tools)
   about AI tools and upstream patches.
@@ -117,8 +119,7 @@ profile names. For `j413-usbc-dp`:
 
 The hypervisor takes over the USB port the proxy cable uses, so Linux can't
 use that port's PHY for a display.
-[Decision 0002](../decisions/0002-proxy-on-atc0.md) has the details. If the
-cable is in the wrong port, the boot stops before the guest starts and says
+If the cable is in the wrong port, the boot stops before the guest starts and says
 which port to use. Only move the cable while the Mac is off.
 
 ### Boot

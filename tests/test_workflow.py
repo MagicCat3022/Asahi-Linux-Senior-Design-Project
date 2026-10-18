@@ -1,5 +1,6 @@
 """Host-only safety and PTY tests; these never reboot or modify the Mac."""
 import argparse
+import base64
 import contextlib
 import fcntl
 import importlib.machinery
@@ -12,6 +13,7 @@ import pty
 import subprocess
 import signal
 import select
+import shlex
 import sys
 import tarfile
 import tempfile
@@ -255,6 +257,120 @@ class Bundles(unittest.TestCase):
 
 
 class RemoteBuilds(unittest.TestCase):
+    def test_toolchain_capture_uses_make_selection_and_reports_unavailable_tools(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            tools = source / "tools with spaces"
+            tools.mkdir()
+            for name in ("custom-cc", "clang-99", "ld.lld-99", "custom-rustc", "pahole"):
+                executable = tools / name
+                executable.write_text(
+                    "#!" + sys.executable + "\nimport sys\n"
+                    + ("print('version unavailable', file=sys.stderr)\nsys.exit(2)\n" if name == "pahole"
+                       else "print(" + repr(name + " version 1.2.3") + ")\n"
+                            "assert sys.argv[-1] == '--version'\n"))
+                executable.chmod(0o755)
+            (source / "Makefile").write_text(
+                "CC = clang$(LLVM)\nLD = ld.lld$(LLVM)\nRUSTC = rustc\n"
+                "BINDGEN = bindgen\nPAHOLE = pahole\n"
+                "export CC LD RUSTC BINDGEN PAHOLE\n"
+                ".PHONY: run-command\nrun-command:\n\t@$(KBUILD_RUN_COMMAND)\n")
+            selected_cc = shlex.quote(str(tools / "custom-cc")) + " --target=aarch64"
+            settings = {"source": str(source), "make_args": [
+                "LLVM=-99", "CC=" + selected_cc,
+                "RUSTC=" + shlex.quote(str(tools / "custom-rustc")),
+                "BINDGEN=" + str(source / "missing-bindgen")]}
+            command, _, _ = remote.make_command(settings)
+            with patch.dict(os.environ, {"PATH": str(tools) + os.pathsep + os.environ["PATH"]}):
+                result = remote.toolchain_info(command)
+            self.assertEqual(result["CC"]["command"], selected_cc)
+            self.assertEqual(result["CC"]["executable"], str(tools / "custom-cc"))
+            self.assertEqual(result["CC"]["version"], "custom-cc version 1.2.3")
+            self.assertEqual(result["LD"]["command"], "ld.lld-99")
+            self.assertEqual(result["LD"]["version"], "ld.lld-99 version 1.2.3")
+            self.assertEqual(result["RUSTC"]["version"], "custom-rustc version 1.2.3")
+            self.assertIsNone(result["BINDGEN"]["version"])
+            self.assertIsNone(result["BINDGEN"]["executable"])
+            self.assertIn("error", result["BINDGEN"])
+            self.assertIsNone(result["PAHOLE"]["version"])
+            self.assertEqual(result["PAHOLE"]["returncode"], 2)
+            self.assertEqual(result["PAHOLE"]["error"], "version unavailable")
+
+    def test_completed_build_captures_final_config_and_rejects_later_config_changes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source, output = Path(temporary) / "source", Path(temporary) / "output"
+            source.mkdir()
+            output.mkdir()
+            subprocess.run(["git", "init", "-q", str(source)], check=True)
+            (source / "input").write_text("source\n")
+            subprocess.run(["git", "-C", str(source), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(source), "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                            "commit", "-qm", "Fixture"], check=True)
+            fixture_bundle(output)
+            (output / "modules.order").write_text("")
+            (output / "Module.symvers").write_text("")
+            settings = {"source": str(source), "output": str(output), "jobs": 1}
+            actual_run = remote.run
+            corrupt = False
+            def make(command, **kwargs):
+                if command[0] != "make":
+                    return actual_run(command, **kwargs)
+                if command[-1] == "olddefconfig":
+                    with (output / ".config").open("a") as config:
+                        config.write("CONFIG_FINAL=y\n")
+                elif command[-1] == "kernelrelease":
+                    return "snapshot-test-unique"
+                elif corrupt:
+                    with (output / ".config").open("a") as config:
+                        config.write("CONFIG_CHANGED_DURING_BUILD=y\n")
+            toolchain = {"CC": {"command": "clang", "version": "clang version fixture"}}
+            with patch.object(remote, "run", side_effect=make), \
+                 patch.object(remote, "toolchain_info", return_value=toolchain):
+                result = remote.build(settings)
+                self.assertEqual(result["toolchain"], toolchain)
+                with tarfile.open(fileobj=io.BytesIO(base64.b64decode(result["build_inputs"])), mode="r:gz") as archive:
+                    self.assertEqual(archive.extractfile(".config").read(), (output / ".config").read_bytes())
+                corrupt = True
+                with self.assertRaisesRegex(ValueError, "Config changed during"):
+                    remote.build(settings)
+
+    def test_build_inputs_recreate_staged_unstaged_binary_and_untracked_source(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source, restored = Path(temporary) / "source", Path(temporary) / "restored"
+            source.mkdir()
+            git = ["git", "-C", str(source)]
+            subprocess.run(git + ["init", "-q"], check=True)
+            (source / ".gitignore").write_text(".config\n")
+            (source / "tracked").write_text("original\n")
+            (source / "deleted").write_text("delete me\n")
+            subprocess.run(git + ["add", "."], check=True)
+            subprocess.run(git + ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "Fixture"], check=True)
+            subprocess.run(["git", "clone", "-q", str(source), str(restored)], check=True)
+            (source / "tracked").write_text("staged\n")
+            subprocess.run(git + ["add", "tracked"], check=True)
+            (source / "tracked").write_bytes(b"unstaged\x00binary\n")
+            (source / "deleted").unlink()
+            (source / "new file").write_bytes(b"\x00exact private bytes\xff")
+            (source / "new file").chmod(0o755)
+            (source / "link").symlink_to("new file")
+            config = b'CONFIG_LOCALVERSION="alice@macbox"\n'
+            (source / ".config").write_bytes(config)
+            archive = base64.b64decode(remote.build_inputs(source, source))
+            with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as bundle:
+                self.assertEqual(bundle.extractfile(".config").read(), config)
+                subprocess.run(["git", "-C", str(restored), "apply", "--binary", "-"],
+                               input=bundle.extractfile("source.patch").read(), check=True)
+                for entry in bundle.getmembers():
+                    if entry.name.startswith("untracked/"):
+                        entry.name = entry.name.removeprefix("untracked/")
+                        bundle.extract(entry, restored, filter="data")
+            self.assertEqual((restored / "tracked").read_bytes(), (source / "tracked").read_bytes())
+            self.assertFalse((restored / "deleted").exists())
+            self.assertEqual((restored / "new file").read_bytes(), (source / "new file").read_bytes())
+            self.assertTrue((restored / "new file").stat().st_mode & 0o111)
+            self.assertEqual(os.readlink(restored / "link"), "new file")
+            self.assertEqual(remote.source_info(restored)["fingerprint"], remote.source_info(source)["fingerprint"])
+
     def test_missing_profile_option_stops_before_configuration_changes(self):
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary)
@@ -616,6 +732,32 @@ class Execution(unittest.TestCase):
 
 
 class Evidence(unittest.TestCase):
+    def test_workflow_snapshot_preserves_actual_tools_profiles_and_local_edits(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "tools/profiles").mkdir(parents=True)
+            (root / "tools/asahi").write_text("original tool\n")
+            (root / "tools/profiles/test.json").write_text('{"port": 0}\n')
+            (root / ".gitignore").write_text(".asahi/\n")
+            git = ["git", "-C", str(root)]
+            subprocess.run(git + ["init", "-q"], check=True)
+            subprocess.run(git + ["add", "."], check=True)
+            subprocess.run(git + ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "Fixture"], check=True)
+            (root / "tools/asahi").write_text("locally edited tool\n")
+            (root / "tools/asahi").chmod(0o755)
+            (root / "tools/new-helper").write_text("new helper\n")
+            (root / ".asahi").mkdir()
+            (root / ".asahi/secret").write_text("never snapshot machine settings")
+            with patch.object(host, "ROOT", root):
+                metadata, data = host.workflow_snapshot()
+            self.assertTrue(metadata["dirty"])
+            self.assertEqual(metadata["commit"], subprocess.check_output(git + ["rev-parse", "HEAD"], text=True).strip())
+            with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as archive:
+                self.assertEqual(sorted(archive.getnames()), ["tools/asahi", "tools/new-helper", "tools/profiles/test.json"])
+                self.assertEqual(archive.extractfile("tools/asahi").read(), b"locally edited tool\n")
+                self.assertTrue(archive.getmember("tools/asahi").mode & 0o111)
+            self.assertEqual(metadata["files_sha256"]["tools/asahi"], host.digest(root / "tools/asahi"))
+
     def fixture(self, root):
         state = root / ".asahi"
         host.save(state / "target.json", {"compatible": "apple,j413",
@@ -641,6 +783,7 @@ class Evidence(unittest.TestCase):
         host.save(state / "driver-checks/20261014T023000000000Z.json", {"release": "7.1-sdp", "passed": False})
         host.save(state / "builds/20261014T000000000000Z/build.json", {
             "release": "7.1-sdp", "source": "/home/alice/kernel", "commit": "301e2ba4",
+            "toolchain": {"CC": {"command": "/home/alice/llvm/bin/clang", "version": "clang version 22.1.8"}},
             "artifact_sha256": {".config": "c", "arch/arm64/boot/Image": "i", "drivers/a.ko": "a", "drivers/b.ko": "b",
                                 "arch/arm64/boot/dts/apple/t8112-j413.dtb": "j", "arch/arm64/boot/dts/apple/t8103-j274.dtb": "x"}})
         return state, run
@@ -649,7 +792,7 @@ class Evidence(unittest.TestCase):
         cfg = cfg or {"target": "alice@192.0.2.5", "private_evidence_dir": str(root / "private"),
                       "private_evidence_url": "https://github.com/team/evidence/"}
         args = SimpleNamespace(destination="docs/experiments/2026-10-14-test/evidence", run_dir=str(run),
-                               driver_check=[], skip_logs=skip_logs)
+                               driver_check=[], skip_logs=skip_logs, finalize=False, yes=False)
         with patch.object(host, "ROOT", root), patch.object(host, "STATE", state), \
              contextlib.redirect_stdout(io.StringIO()):
             host.evidence(cfg, args)
@@ -680,15 +823,17 @@ class Evidence(unittest.TestCase):
             state, run = self.fixture(root)
             output, private = self.collect(root, state, run)
             names = sorted(path.name for path in output.iterdir())
-            self.assertEqual(names, ["boot.json", "build.json", "driver-check-20261014T013000000000Z.json", "logs.md"])
+            self.assertEqual(names, ["boot.json", "build.json", "driver-check-20261014T013000000000Z.json", "logs.md", "private-evidence.json"])
             self.assertEqual(sorted(path.name for path in private.iterdir()), ["serial.log"])  # empty proxy.log skipped
-            self.assertIn("(https://github.com/team/evidence/blob/main/2026-10-14-test/20261014T010000000000Z/serial.log)",
-                          (output / "logs.md").read_text())
+            self.assertNotIn("/blob/main/", (output / "logs.md").read_text())
+            self.assertIsNone(host.load(output / "private-evidence.json")["commit"])
             build = json.loads((output / "build.json").read_text())
             self.assertEqual(build["module_count"], 2)
             self.assertEqual(sorted(build["artifact_sha256"]),
                              [".config", "arch/arm64/boot/Image", "arch/arm64/boot/dts/apple/t8112-j413.dtb"])
             self.assertEqual(build["source"], "~/kernel")
+            self.assertEqual(build["toolchain"]["CC"]["command"], "~/llvm/bin/clang")
+            self.assertEqual(build["toolchain"]["CC"]["version"], "clang version 22.1.8")
 
     def test_logs_need_a_private_destination_or_explicit_skip(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -708,6 +853,141 @@ class Evidence(unittest.TestCase):
             self.collect(root, state, run)
             with self.assertRaisesRegex(ValueError, "already exists"):
                 self.collect(root, state, run)
+
+    def private_repo(self, root):
+        private = root / "private"
+        private.mkdir()
+        subprocess.run(["git", "init", "-q", str(private)], check=True)
+        subprocess.run(["git", "init", "--bare", "-q", str(root / "server.git")], check=True)
+        git = ["git", "-C", str(private)]
+        subprocess.run(git + ["config", "user.name", "Test"], check=True)
+        subprocess.run(git + ["config", "user.email", "test@example.invalid"], check=True)
+        subprocess.run(git + ["remote", "add", "origin", str(root / "server.git")], check=True)
+        return git
+
+    def test_finalize_requires_unchanged_committed_and_pushed_bytes_and_pins_links(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            git = self.private_repo(root)
+            state, run = self.fixture(root)
+            output, private = self.collect(root, state, run)
+            cfg = {"private_evidence_dir": str(root / "private"), "private_evidence_url": "https://github.com/team/evidence"}
+            subprocess.run(git + ["add", "."], check=True)
+            subprocess.run(git + ["commit", "-qm", "Evidence"], check=True)
+            with self.assertRaisesRegex(ValueError, "not published"):
+                host.finalize_evidence(cfg, output, private)
+            subprocess.run(git + ["push", "-q", "origin", "HEAD:refs/heads/archive"], check=True)
+            log = private / "serial.log"
+            original = log.read_bytes()
+            log.write_bytes(b"changed")
+            with self.assertRaisesRegex(ValueError, "uncommitted"):
+                host.finalize_evidence(cfg, output, private)
+            subprocess.run(git + ["add", "."], check=True)
+            subprocess.run(git + ["commit", "-qm", "Changed log"], check=True)
+            with self.assertRaisesRegex(ValueError, "differs from the exported"):
+                host.finalize_evidence(cfg, output, private)
+            log.write_bytes(original)
+            subprocess.run(git + ["add", "."], check=True)
+            subprocess.run(git + ["commit", "-qm", "Restore log"], check=True)
+            subprocess.run(git + ["push", "-q", "origin", "HEAD:refs/heads/archive"], check=True)
+            with contextlib.redirect_stdout(io.StringIO()):
+                host.finalize_evidence(cfg, output, private)
+            commit = subprocess.check_output(git + ["rev-parse", "HEAD"], text=True).strip()
+            self.assertEqual(host.load(output / "private-evidence.json")["commit"], commit)
+            self.assertIn("/blob/" + commit + "/", (output / "logs.md").read_text())
+            self.assertNotIn("/blob/main/", (output / "logs.md").read_text())
+            # A later change to the branch cannot retarget this report.
+            before = (output / "logs.md").read_bytes()
+            log.write_bytes(b"later log edit")
+            subprocess.run(git + ["add", "."], check=True)
+            subprocess.run(git + ["commit", "-qm", "Later edit"], check=True)
+            subprocess.run(git + ["push", "-q", "origin", "HEAD:refs/heads/archive"], check=True)
+            with contextlib.redirect_stdout(io.StringIO()):
+                host.finalize_evidence(cfg, output, private)
+            self.assertEqual((output / "logs.md").read_bytes(), before)
+            saved = subprocess.check_output(git + ["show", commit + ":2026-10-14-test/" + run.name + "/serial.log"])
+            self.assertEqual(saved, original)
+
+    def test_starts_the_report_with_inputs_and_automated_results_once(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            state, run = self.fixture(root)
+            host.save(run / "check.json", {"mode": "hv", "passed": True, "release": "7.1-sdp"})
+            host.save(state / "driver-checks/20261014T013000000000Z.json",
+                      {"release": "7.1-sdp", "passed": False, "errors": ["dcp not bound"], "running_release": "7.1-sdp"})
+            self.collect(root, state, run)
+            report = root / "docs/experiments/2026-10-14-test/README.md"
+            text = report.read_text()
+            self.assertIn("# 2026-10-14: FILL IN title", text)
+            self.assertIn(f"**Runs:** `{run.name}`", text)
+            self.assertIn("| Kernel commit | `301e2ba4` in `~/kernel` |", text)
+            self.assertIn("CC: clang version 22.1.8", text)
+            self.assertIn(f"| HV boot: run marker, release, root, modules, SSH | PASS | automated | "
+                          f"[check.json](evidence/{run.name}/check.json) |", text)
+            self.assertIn("| Driver binding (live) | FAIL: dcp not bound | automated |", text)
+            self.assertIn(f"[logs.md](evidence/{run.name}/logs.md)", text)
+            self.assertNotIn("alice", text)
+            self.assertNotIn("| Kernel commit | Full commit hash", text)  # template rows replaced
+            # A second run adds to the report by hand; the tool never rewrites it.
+            report.write_text("edited\n")
+            second = state / "runs/20261014T020000000000Z"
+            host.save(second / "boot.json", {"release": "7.1-sdp"})
+            (second / "serial.log").write_text("boot\n")
+            self.collect(root, state, second)
+            self.assertEqual(report.read_text(), "edited\n")
+
+    def test_finalize_commits_and_pushes_only_after_confirmation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            git = self.private_repo(root)
+            (root / "private/other.txt").write_text("someone else's work in progress\n")
+            state, run = self.fixture(root)
+            output, private = self.collect(root, state, run)
+            cfg = {"target": "alice@192.0.2.5", "private_evidence_dir": str(root / "private"),
+                   "private_evidence_url": "https://github.com/team/evidence"}
+            args = SimpleNamespace(destination="docs/experiments/2026-10-14-test/evidence", run_dir=str(run),
+                                   driver_check=[], skip_logs=False, finalize=True, yes=False)
+            with patch.object(host, "ROOT", root), patch.object(host, "STATE", state), \
+                 patch.object(sys.stdin, "isatty", lambda: False), contextlib.redirect_stdout(io.StringIO()):
+                with self.assertRaisesRegex(ValueError, "--yes"):
+                    host.evidence(cfg, args)
+                self.assertIsNone(host.load(output / "private-evidence.json")["commit"])
+                args.yes = True
+                host.evidence(cfg, args)
+            commit = subprocess.check_output(git + ["rev-parse", "HEAD"], text=True).strip()
+            self.assertEqual(host.load(output / "private-evidence.json")["commit"], commit)
+            self.assertEqual(subprocess.run(["git", "-C", str(root / "server.git"), "cat-file", "-e", commit]).returncode, 0)
+            committed = subprocess.check_output(git + ["show", "--name-only", "--format=", commit], text=True).split()
+            self.assertEqual(committed, ["2026-10-14-test/" + run.name + "/serial.log"])  # not other.txt
+
+    def test_exact_build_inputs_are_private_and_verified(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            state, run = self.fixture(root)
+            directory = state / "builds/20261014T000000000000Z"
+            build = host.load(directory / "build.json")
+            build["reproduction_sha256"] = {}
+            for name in ("build-inputs.tar.gz", "build-workflow.tar.gz"):
+                (directory / name).write_bytes(b"alice@macbox\x00exact input bytes")
+                build["reproduction_sha256"][name] = host.digest(directory / name)
+            host.save(directory / "build.json", build)
+            output, private = self.collect(root, state, run)
+            for name in build["reproduction_sha256"]:
+                self.assertEqual((private / name).read_bytes(), (directory / name).read_bytes())
+                self.assertFalse((output / name).exists())
+            self.assertNotIn("alice@macbox", (output / "build.json").read_text())
+            # Validation fails before creating a partial export that blocks retry.
+            other = root / "other"
+            other.mkdir()
+            state, run = self.fixture(other)
+            directory = state / "builds/20261014T000000000000Z"
+            build = host.load(directory / "build.json")
+            build["reproduction_sha256"] = {"build-inputs.tar.gz": "wrong"}
+            (directory / "build-inputs.tar.gz").write_bytes(b"corrupt")
+            host.save(directory / "build.json", build)
+            with self.assertRaisesRegex(ValueError, "changed build input"):
+                self.collect(other, state, run)
+            self.assertFalse((other / "docs").exists())
 
 
 class Profiles(unittest.TestCase):
@@ -769,7 +1049,10 @@ class Status(unittest.TestCase):
             host.save(run / "boot.json", {"release": "7.1-sdp", "state": "exited"})
             self.assertIn("kill-session", self.next_steps(root, {"serial": True, "hv": False}))
             self.assertIn("recording-an-experiment", self.next_steps(root))
-            (root / "docs/experiments/2026-10-14-x/evidence" / run.name).mkdir(parents=True)
+            pending = root / "docs/experiments/2026-10-14-x/evidence" / run.name
+            host.save(pending / "private-evidence.json", {"commit": None, "files_sha256": {"serial.log": "0" * 64}})
+            self.assertIn("--finalize", self.next_steps(root))
+            host.save(pending / "private-evidence.json", {"commit": "1" * 40, "files_sha256": {}})
             self.assertIn("session start", self.next_steps(root))
 
 

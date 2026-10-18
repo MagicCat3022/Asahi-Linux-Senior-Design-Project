@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Build Asahi kernels on the test Mac and boot them under the m1n1 hypervisor from this PC."""
 import argparse
+import base64
 import datetime as dt
 import fcntl
 import gzip
 import hashlib
+import io
 import json
 import lzma
 import os
@@ -24,14 +26,16 @@ import termios
 import textwrap
 import time
 import tty
+from urllib.parse import quote
 
 ROOT = Path(__file__).resolve().parent.parent
 STATE = ROOT / ".asahi"
 CONFIG = ROOT / "asahi.local.json"
 REMOTE = ROOT / "tools/asahi-remote.py"
 PROFILES = ROOT / "tools/profiles"
+REPORT_TEMPLATE = ROOT / "docs/templates/experiment.md"
 # Values `init` writes to asahi.local.json; see docs/reference/asahi-tool.md.
-DEFAULTS = {"identity": "~/.ssh/asahi_hv", "m1n1_dir": "~/projects/m1n1",
+DEFAULTS = {"identity": "~/.ssh/asahi_hv", "m1n1_dir": "~/Github/m1n1",
             "build_source": "~/linux-fairydust", "make_args": ["LLVM=1"],
             "proxy": "/dev/m1n1", "console": "/dev/m1n1-sec", "session": "asahi-hv",
             "bundle": "hv-bundle", "private_evidence_dir": "~/Github/asahi-sdp-evidence",
@@ -179,6 +183,25 @@ def extract_archive(archive, destination):
 def digest(path):
     with Path(path).open("rb") as stream:
         return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def workflow_snapshot():
+    """Record the revision and the actual tool/profile files, including local edits."""
+    git = ["git", "-C", str(ROOT)]
+    paths = ["tools"]
+    commit = subprocess.check_output(git + ["rev-parse", "HEAD"], text=True).strip()
+    dirty = bool(subprocess.check_output(git + ["status", "--porcelain", "--", *paths]))
+    names = subprocess.check_output(git + ["ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", *paths])
+    stream, hashes = io.BytesIO(), {}
+    with tarfile.open(fileobj=stream, mode="w:gz") as archive:
+        for name in sorted(set(filter(None, names.split(b"\0")))):
+            relative = os.fsdecode(name)
+            path = ROOT / relative
+            if not path.exists() and not path.is_symlink():
+                continue  # A deletion is represented by absence from this complete snapshot.
+            archive.add(path, arcname=relative, recursive=False)
+            hashes[relative] = hashlib.sha256(os.readlink(path).encode() if path.is_symlink() else path.read_bytes()).hexdigest()
+    return {"commit": commit, "dirty": dirty, "files_sha256": hashes}, stream.getvalue()
 
 
 def normalize_image(path):
@@ -433,6 +456,9 @@ def boot(cfg, args):
         except BlockingIOError:
             fail("Another workflow process owns the proxy/HV. Use hv commands on that session.")
         run_dir.mkdir(parents=True, exist_ok=True)
+        record["workflow"], workflow_bytes = workflow_snapshot()
+        (run_dir / "boot-workflow.tar.gz").write_bytes(workflow_bytes)
+        record["workflow"]["archive_sha256"] = digest(run_dir / "boot-workflow.tar.gz")
         save(STATE / "latest-run.json", {"directory": str(run_dir)})
         record["state"] = "started"
         save(run_dir / "boot.json", record)
@@ -613,7 +639,10 @@ def gather_status():
         check_record = load(run / "check.json") if (run / "check.json").exists() else {}
         result["run"] = {"id": run.name, "release": boot_record.get("release"), "state": boot_record.get("state"),
                          "check": (("PASS " + check_record.get("mode", "")) if check_record.get("passed") else None),
-                         "recorded_in": recorded_in(run.name)}
+                         "recorded_in": recorded_in(run.name),
+                         "unpinned": [folder for folder in recorded_in(run.name)
+                                      if (ROOT / folder / run.name / "private-evidence.json").exists()
+                                      and not load(ROOT / folder / run.name / "private-evidence.json").get("commit")]}
     result["next"] = next_step(result)
     return result
 
@@ -637,6 +666,9 @@ def next_step(status):
             return ("Run in progress: use hv, logs, and ssh. When done: ./tools/asahi ssh -- sudo -n systemctl poweroff, "
                     "then check ./tools/asahi logs")
         return "Session waiting for the Mac: boot the m1n1 proxy entry, or ./tools/asahi session attach"
+    if run.get("unpinned"):
+        return (f"Read the exported files, then: ./tools/asahi evidence {run['unpinned'][0]} "
+                f"--run-dir .asahi/runs/{run['id']} --finalize")
     if run.get("check") and not run.get("recorded_in"):
         return f"Run {run['id']} is not in any experiment report: see docs/guides/recording-an-experiment.md"
     return "./tools/asahi session start --wait 600, then boot the Mac into its m1n1 proxy entry"
@@ -737,28 +769,168 @@ def build_summary(release):
         hashes = build.get("artifact_sha256", {})
         kept = {name: value for name, value in hashes.items()
                 if not name.endswith(".ko") and (not name.endswith(".dtb") or name.endswith("-" + board + ".dtb"))}
-        return {**{key: value for key, value in build.items() if key != "artifact_sha256"},
+        return {**{key: value for key, value in build.items() if key not in {"artifact_sha256", "build_inputs"}},
                 "build_record": record.parent.name, "module_count": sum(name.endswith(".ko") for name in hashes),
                 "artifact_sha256": kept}
     return None
 
 
+def published(git, commit):
+    # Check the server, not a potentially stale local origin/main tracking ref.
+    heads = subprocess.check_output(git + ["ls-remote", "--heads", "origin"], text=True)
+    return any(subprocess.run(git + ["merge-base", "--is-ancestor", commit, line.split()[0]],
+                              capture_output=True).returncode == 0 for line in heads.splitlines())
+
+
+def publish_private(cfg, private, run_name, assume_yes=False):
+    """Commit and push one run's private folder after the person has seen its file list."""
+    root = local_path(cfg["private_evidence_dir"])
+    relative = private.relative_to(root).as_posix()
+    git = ["git", "-C", str(root)]
+    changed = subprocess.check_output(git + ["status", "--porcelain", "--untracked-files=all", "--", relative], text=True)
+    if changed:
+        print("Private files to commit:\n" + changed.rstrip())
+        if not assume_yes:
+            if not sys.stdin.isatty():
+                fail("Review the private files, then rerun with --yes to commit and push them")
+            if input("Commit and push them to the private evidence repository? [y/N] ").strip().lower() not in {"y", "yes"}:
+                fail("Nothing committed; rerun with --finalize when the private files are ready")
+        subprocess.run(git + ["add", "--", relative], check=True)
+        subprocess.run(git + ["commit", "-q", "-m", f"Add evidence for {private.parent.name} run {run_name}", "--", relative],
+                       check=True)
+    commit = subprocess.check_output(git + ["rev-parse", "HEAD"], text=True).strip()
+    if not published(git, commit) and subprocess.run(git + ["push", "-q", "origin", "HEAD"]).returncode:
+        fail(f"Push failed; run git -C {shlex.quote(str(root))} pull --rebase, then rerun with --finalize")
+
+
+def finalize_evidence(cfg, destination, private):
+    """Pin the exact copied bytes, only after their commit has been pushed."""
+    root = local_path(cfg["private_evidence_dir"])
+    relative = private.relative_to(root).as_posix()
+    git = ["git", "-C", str(root)]
+    commit = subprocess.check_output(git + ["rev-parse", "HEAD"], text=True).strip()
+    manifest_path = destination / "private-evidence.json"
+    manifest = load(manifest_path) if manifest_path.exists() else {
+        "files_sha256": {path.name: digest(path) for path in sorted(private.iterdir()) if path.is_file()}}
+    if manifest.get("commit"):
+        print("Private evidence already pinned:", manifest["commit"])
+        return
+    if not manifest["files_sha256"]:
+        fail("No private evidence to finalize")
+    if subprocess.check_output(git + ["status", "--porcelain", "--untracked-files=all", "--", relative]):
+        fail("Private evidence has uncommitted changes; review and commit it first")
+    for name, expected in manifest["files_sha256"].items():
+        path = PurePosixPath(name)
+        if path.name != name or name in {".", ".."}:
+            fail("Unsafe private evidence filename")
+        data = subprocess.check_output(git + ["show", commit + ":" + relative + "/" + name])
+        if hashlib.sha256(data).hexdigest() != expected:
+            fail("Committed private evidence differs from the exported copy: " + name)
+    if not published(git, commit):
+        fail("Private evidence commit is not published; push it before finalizing")
+    base = cfg["private_evidence_url"].rstrip("/") + "/blob/" + commit + "/" + quote(relative, safe="/") + "/"
+    manifest.update(commit=commit, url=base)
+    save(manifest_path, manifest)
+    (destination / "logs.md").write_text(
+        f"# Private evidence for run {private.name}\n\n"
+        f"Pinned to private evidence commit `{commit}`. Links require team access.\n\n"
+        + "\n".join(f"- [{name}]({base + quote(name, safe='')}) *(private)*" for name in manifest["files_sha256"]) + "\n")
+    print("Pinned private evidence:", destination / "logs.md")
+
+
+def report_tables(evidence_link, files, summary, exact, private_files):
+    """Inputs and automated Results rows for one run, from the records it already has."""
+    records = {name: json.loads(data) for name, data in files.items() if name.endswith(".json")}
+    boot, check_record = records.get("boot.json", {}), records.get("check.json")
+    summary = summary or {}
+
+    def workflow(value):
+        if not value.get("commit"):
+            return "not recorded"
+        return f"`{value['commit']}`" + (" with local edits to tools/" if value.get("dirty") else "")
+
+    toolchain = "; ".join(f"{name}: {tool['version'].splitlines()[0]}" for name, tool in summary.get("toolchain", {}).items()
+                          if isinstance(tool, dict) and tool.get("version"))
+    config_hash = summary.get("artifact_sha256", {}).get(".config") or (
+        hashlib.sha256(exact["kernel.config"]).hexdigest() if "kernel.config" in exact else None)
+    kept = sorted(name for name in exact if name.endswith(".tar.gz"))
+    missing = [name for name in ("build-inputs.tar.gz", "build-workflow.tar.gz", "boot-workflow.tar.gz") if name not in exact]
+    inputs = [
+        ("Kernel commit", f"`{summary['commit']}` in `{summary.get('source')}`"
+         + (" with uncommitted changes" if summary.get("dirty") else "") if summary.get("commit")
+         else "installed kernel; no build record"),
+        ("Kernel release", f"`{boot.get('release') or (check_record or {}).get('release')}`"),
+        ("Config", f"SHA-256 `{config_hash}`; changes from the baseline: FILL IN" if config_hash else "not recorded"),
+        ("Driver profile", f"`{summary['driver_profile']['name']}`" if summary.get("driver_profile") else "none"),
+        ("Toolchain", toolchain or "not recorded for this build"),
+        ("m1n1 commit", f"`{boot['m1n1_commit']}`" if boot.get("m1n1_commit") else "not recorded"),
+        ("Project commit", f"build {workflow(summary.get('workflow', {}))}; boot {workflow(boot.get('workflow', {}))}"),
+        ("Exact inputs (private)", (", ".join(f"`{name}`" for name in kept) or "config only")
+         + (f"; unavailable: {', '.join(missing)}" if missing else "")
+         + (f"; links in [logs.md]({evidence_link}/logs.md)" if private_files else "; not archived (`--skip-logs`)")),
+        ("Hardware", "`MAC-NN`; proxy on ATCn; displays and cables: FILL IN"),
+    ]
+    results = []
+    if check_record:
+        label = ("HV boot: run marker, release, root, modules, SSH" if check_record.get("mode") == "hv"
+                 else "Normal boot (`check --running`; not an HV result)")
+        results.append((label, "PASS" if check_record.get("passed") else "FAIL", "automated",
+                        f"[check.json]({evidence_link}/check.json)"))
+    else:
+        results.append(("HV boot check", "NOT TESTED", "—", "`check` was not run"))
+    for name, record in records.items():
+        if name.startswith("driver-check-"):
+            label = "Driver binding (live)" if "running_release" in record else "Driver modules in the bundle"
+            outcome = "PASS" if record.get("passed") else "FAIL: " + "; ".join(record.get("errors", [])[:2])
+            results.append((label, outcome, "automated", f"[{name.removesuffix('.json')}]({evidence_link}/{name})"))
+    results.append(("FILL IN: what a person checked (display, hot-plug)", "NOT TESTED", "manual", "observer and time"))
+    return (["| " + " | ".join(row) + " |" for row in inputs],
+            ["| " + " | ".join(cell.replace("|", "\\|") for cell in row) + " |" for row in results])
+
+
+def fill_table(text, header, rows):
+    """Replace a Markdown table's body, keeping its header and separator."""
+    lines = text.split("\n")
+    start = lines.index(header) + 2
+    end = start
+    while end < len(lines) and lines[end].startswith("|"):
+        end += 1
+    return "\n".join(lines[:start] + rows + lines[end:])
+
+
+def write_report(report, run_name, inputs, results):
+    """Start the experiment report from the template, with this run's facts filled in."""
+    text = REPORT_TEMPLATE.read_text()
+    slug = report.parent.name
+    author = subprocess.run(["git", "-C", str(ROOT), "config", "user.name"], capture_output=True, text=True).stdout.strip()
+    text = text.replace("# YYYY-MM-DD: Short experiment title", f"# {slug[:10]}: FILL IN title", 1)
+    text = text.replace("**Author:** NAME", f"**Author:** {author or 'NAME'}", 1)
+    text = text.replace("**Runs:** `RUN_ID`", f"**Runs:** `{run_name}`", 1)
+    text = fill_table(text, "| Input | Value |", inputs)
+    return fill_table(text, "| Check | Result | How | Evidence |", results)
+
+
 def evidence(cfg, args):
     run = local_path(args.run_dir) if args.run_dir else run_directory()
-    if not run.is_dir():
+    if not run.is_dir() and not args.finalize:
         fail(f"No run directory {run}")
     experiment = local_path(args.destination)
     destination = experiment / run.name
     # Free-text logs can hold identifiers nobody knew to redact, so they go to
     # the team's private evidence repository; this repository is public.
-    private = url = None
+    private = None
     if not args.skip_logs:
         if not cfg.get("private_evidence_dir") or not cfg.get("private_evidence_url"):
             fail("Set private_evidence_dir and private_evidence_url in asahi.local.json "
                  "(see docs/guides/recording-an-experiment.md), or pass --skip-logs")
         slug = (experiment.parent if experiment.name == "evidence" else experiment).name
         private = local_path(cfg["private_evidence_dir"]) / slug / run.name
-        url = cfg["private_evidence_url"].rstrip("/") + "/blob/main/" + slug + "/" + run.name + "/"
+    if args.finalize:
+        if not private or not destination.is_dir() or not private.is_dir():
+            fail("Finalization needs existing public and private evidence folders; omit --skip-logs")
+        publish_private(cfg, private, run.name, args.yes)
+        finalize_evidence(cfg, destination, private)
+        return
     for path in (destination, private):
         if path and path.exists():
             fail(f"{path} already exists; evidence is copied once per run")
@@ -780,7 +952,30 @@ def evidence(cfg, args):
         files["build.json"] = (json.dumps(summary, indent=2) + "\n").encode()
     texts = {name: data.decode("utf-8", "surrogateescape") for name, data in files.items()}
     redact = redactor(cfg, list(texts.values()))
-    links = []
+    private_files = {}
+    # Exact build inputs must not pass through redaction, which would corrupt
+    # configs and patches. Only hashes and revision metadata go in public JSON.
+    exact = {}
+    if summary:
+        build_dir = STATE / "builds" / summary["build_record"]
+        for name, expected in summary.get("reproduction_sha256", {}).items():
+            if name not in {"build-inputs.tar.gz", "build-workflow.tar.gz"}:
+                fail("Unexpected reproduction archive")
+            path = build_dir / name
+            if not path.is_file() or digest(path) != expected:
+                fail("Missing or changed build input archive: " + name)
+            exact[name] = path.read_bytes()
+    if (run / "boot-workflow.tar.gz").exists():
+        path = run / "boot-workflow.tar.gz"
+        if digest(path) != record.get("workflow", {}).get("archive_sha256"):
+            fail("Boot workflow archive checksum mismatch")
+        exact[path.name] = path.read_bytes()
+    bundle = local_path(record["bundle"]) if record.get("bundle") else None
+    if bundle and (bundle / ".config").is_file():
+        manifest = load(bundle / "manifest.json")
+        if digest(bundle / ".config") != manifest["sha256"].get(".config"):
+            fail("Bundle config checksum mismatch")
+        exact["kernel.config"] = (bundle / ".config").read_bytes()
     for name, text in texts.items():
         log = name.endswith(".log")
         if log and not private:
@@ -793,18 +988,32 @@ def evidence(cfg, args):
         (directory / name).write_bytes(data)
         print(f"{len(data):>9}  {directory / name}")
         if log:
-            links.append(f"- [{name}]({url + name})")
-    if links:
+            private_files[name] = digest(directory / name)
+    if private:
+        for name, data in exact.items():
+            private.mkdir(parents=True, exist_ok=True)
+            (private / name).write_bytes(data)
+            private_files[name] = digest(private / name)
+    if private_files:
         destination.mkdir(parents=True, exist_ok=True)
+        save(destination / "private-evidence.json", {"commit": None, "files_sha256": private_files})
         (destination / "logs.md").write_text(
-            f"# Logs for run {run.name}\n\nThe full logs are in the team's private evidence repository:\n\n"
-            + "\n".join(links) + "\n")
-        print("Private log links:", destination / "logs.md")
-        root = local_path(cfg["private_evidence_dir"])
-        print("Publish the logs to the team: git -C", shlex.quote(str(root)), "add . && git -C",
-              shlex.quote(str(root)), "commit -m", shlex.quote(f"Add logs for {private.parent.name} run {run.name}"),
-              "&& git -C", shlex.quote(str(root)), "push")
-    print("Identifiers known to the workflow were replaced. Read the files before committing them.")
+            f"# Private evidence for run {run.name}\n\nPending: review the private files, "
+            "then rerun evidence with `--finalize` to commit, push, and pin them.\n")
+    report_dir = experiment.parent if experiment.name == "evidence" else experiment
+    inputs, results = report_tables(destination.relative_to(report_dir).as_posix(), files, summary, exact, private_files)
+    report = report_dir / "README.md"
+    if report.exists():
+        print(f"\nAdd this run to {report}. Results rows:\n" + redact("\n".join(results))
+              + "\nInputs, if they differ from the report's:\n" + redact("\n".join(inputs)))
+    else:
+        report.write_text(redact(write_report(report, run.name, inputs, results)))
+        print(f"\nStarted the report {report}: Inputs and automated Results are filled in; replace each FILL IN.")
+    print("\nStructured records and logs were redacted; exact inputs stay private and unchanged.")
+    print("Read the files listed above, including the private ones, for anything identifying.")
+    if private_files:
+        print("Then commit, push, and pin the private files:\n  "
+              + shlex.join(["./tools/asahi", "evidence", args.destination, "--run-dir", str(run), "--finalize"]))
 
 # Commands in the order of the workflow; `asahi --help` prints them by group.
 GROUPS = [
@@ -879,10 +1088,13 @@ COMMANDS = {
     "proxy": ("Open m1n1's interactive Python shell without booting a kernel",
               "Ctrl-D exits. Only one program may use the proxy port at a time.", ["proxy"]),
     "evidence": ("Copy a run's records into an experiment report, with identifiers redacted",
-                 "JSON records go to DESTINATION/RUN_ID in this public repository. Logs go to the private "
-                 "evidence repository. Read the output before committing it.",
+                 "JSON records go to DESTINATION/RUN_ID in this public repository; logs and exact build inputs go to "
+                 "the private evidence repository. Starts the report with its Inputs and automated Results filled in, "
+                 "or prints the rows to add if it exists. After reading the files, --finalize commits and pushes the "
+                 "private folder (it asks first) and writes commit-pinned links.",
                  ["evidence docs/experiments/2026-10-21-hotplug/evidence",
-                  "evidence docs/experiments/2026-10-21-hotplug/evidence --run-dir .asahi/runs/RUN_ID"]),
+                  "evidence docs/experiments/2026-10-21-hotplug/evidence --run-dir .asahi/runs/RUN_ID",
+                  "evidence docs/experiments/2026-10-21-hotplug/evidence --run-dir .asahi/runs/RUN_ID --finalize"]),
 }
 
 
@@ -977,7 +1189,10 @@ def build_parser():
     p.add_argument("--driver-check", action="append", default=[], metavar="REPORT",
                    help="Driver-check report to include; repeatable (default: same-kernel reports taken during the run)")
     p.add_argument("--skip-logs", action="store_true",
-                   help="Publish only structured records; leave .log files out of both repositories")
+                   help="Publish only structured records; omit private logs and exact build inputs")
+    p.add_argument("--finalize", action="store_true",
+                   help="Commit and push this run's private folder, verify its checksums, and write pinned links")
+    p.add_argument("--yes", action="store_true", help="With --finalize: commit and push without asking")
     return parser
 
 
@@ -1058,7 +1273,13 @@ def main():
         directory = STATE / "builds" / stamp()
         directory.mkdir(parents=True)
         print("Building on", cfg["target"], "Log:", directory / "build.log", flush=True)
+        workflow, workflow_bytes = workflow_snapshot()
         result = remote(cfg, "build", settings, log=directory / "build.log")
+        (directory / "build-inputs.tar.gz").write_bytes(base64.b64decode(result.pop("build_inputs"), validate=True))
+        (directory / "build-workflow.tar.gz").write_bytes(workflow_bytes)
+        result["workflow"] = workflow
+        result["reproduction_sha256"] = {name: digest(directory / name)
+            for name in ("build-inputs.tar.gz", "build-workflow.tar.gz")}
         save(directory / "build.json", result)
         save(STATE / "latest-build.json", result)
         print("Built:", result["release"], "Next: ./tools/asahi stage")

@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """Check documentation layout rules from docs/README.md: links, names, headers, indexes, tool pointers."""
 from pathlib import Path
+import json
 import re
 import sys
-from urllib.parse import unquote
+from urllib.parse import quote, unquote
 
 LINK = re.compile(r"(?<!!)\[[^\]]*\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
 NAME = re.compile(r"[a-z0-9][a-z0-9.-]*")
 FAILURE = re.compile(r"F-\d{3}-[a-z0-9-]+\.md")
-WEEK = re.compile(r"\d{4}-W\d{2}\.md")
 EXPERIMENT = re.compile(r"\d{4}-\d{2}-\d{2}-[a-z0-9-]+")
 DOC_PATH = re.compile(r"\bdocs/[\w/.-]+\.md(?:#[\w-]+)?")
 
@@ -42,6 +42,8 @@ def check(root):
         text = path.read_text()
         prose = re.sub(r"```.*?```", "", text, flags=re.S)
         for target in LINK.findall(prose):
+            if re.match(r"https://github.com/[^/]+/asahi-sdp-evidence/blob/", target) and not re.search(r"/blob/[0-9a-f]{40}/", target):
+                problems.append(f"{path.relative_to(root)}: private evidence link must use a full commit hash")
             if re.match(r"[a-z]+:", target):
                 continue
             file_part, _, anchor = target.partition("#")
@@ -65,18 +67,36 @@ def check(root):
         parts = path.relative_to(docs).parts
         if "evidence" in parts or path.name == "README.md":
             continue
-        if not (NAME.fullmatch(path.name) or FAILURE.fullmatch(path.name) or WEEK.fullmatch(path.name)):
+        if not (NAME.fullmatch(path.name) or FAILURE.fullmatch(path.name)):
             problems.append(f"docs/{path.relative_to(docs)}: name is not lowercase kebab-case")
     for guide in sorted((docs / "guides").glob("*.md")):
         if guide.name != "README.md" and "**Last verified:**" not in guide.read_text():
             problems.append(f"docs/guides/{guide.name}: missing **Last verified:** line")
     experiments = docs / "experiments"
+    for path in sorted(experiments.glob("*/evidence/*/private-evidence.json")):
+        try:
+            manifest = json.loads(path.read_text())
+            commit = manifest.get("commit")
+            if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit):
+                problems.append(f"{path.relative_to(root)}: private evidence is not finalized")
+                continue
+            base = manifest.get("url", "")
+            if f"/blob/{commit}/" not in base or not base.endswith("/"):
+                problems.append(f"{path.relative_to(root)}: private URL does not match pinned commit")
+            links = (path.parent / "logs.md").read_text()
+            for name, checksum in manifest["files_sha256"].items():
+                if not re.fullmatch(r"[0-9a-f]{64}", checksum) or base + quote(name, safe="") not in links:
+                    problems.append(f"{path.relative_to(root)}: missing pinned link or invalid checksum for {name}")
+        except (OSError, ValueError, KeyError, TypeError):
+            problems.append(f"{path.relative_to(root)}: invalid private evidence manifest or missing logs.md")
     index = (experiments / "README.md").read_text() if (experiments / "README.md").exists() else ""
     for folder in sorted(path for path in experiments.iterdir() if path.is_dir()) if experiments.is_dir() else []:
         if not EXPERIMENT.fullmatch(folder.name):
             problems.append(f"docs/experiments/{folder.name}: name must be YYYY-MM-DD-slug")
         if not (folder / "README.md").exists():
             problems.append(f"docs/experiments/{folder.name}: missing README.md report")
+        elif "FILL IN" in (folder / "README.md").read_text():
+            problems.append(f"docs/experiments/{folder.name}/README.md: replace every FILL IN left by ./tools/asahi evidence")
         if f"({folder.name}/)" not in index:
             problems.append(f"docs/experiments/{folder.name}: not listed in docs/experiments/README.md")
     failures = docs / "failures"

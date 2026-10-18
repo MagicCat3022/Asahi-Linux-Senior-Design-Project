@@ -16,7 +16,6 @@ flowchart LR
 | [set-up-the-controller-pc.md](set-up-the-controller-pc.md) | Set up WSL, m1n1, the `asahi` tool, and USB forwarding, and boot the Mac's own kernel under the hypervisor |
 | [test-a-kernel.md](test-a-kernel.md) | Build a branch on the Mac, boot it under the hypervisor, check it, and test USB-C displays |
 | [recording-an-experiment.md](recording-an-experiment.md) | Turn a run into an experiment report with published evidence |
-| [x86-cross-build-qemu.md](x86-cross-build-qemu.md) | Compile-check on an x86 PC and boot generic arm64 kernels in QEMU, without a Mac |
 
 ## Writing a guide
 
@@ -42,7 +41,7 @@ Then, in this order:
   whose purpose isn't obvious;
 - a **You're done when** checklist for setup guides.
 
-Put explanations of *why* in a sentence or two, and link to a decision or the
+Put explanations of *why* in a sentence or two, and link to the
 [tool reference](../reference/asahi-tool.md) for more. Error messages and
 their fixes go in [Troubleshooting](../reference/asahi-tool.md#troubleshooting),
 not in the steps.

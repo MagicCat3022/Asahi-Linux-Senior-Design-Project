@@ -3,7 +3,8 @@
 This checkout is the `project` branch of the team's Asahi Linux fork. It holds
 documentation, the WSL/m1n1 hypervisor (HV) test workflow, and its tests. It
 contains **no kernel source**: kernel work happens in separate worktrees on
-the test Mac and on `work/*` branches. The repository is **public**.
+the test Mac, on the shared `usb/dev` branch, and on subsystem/topic branches
+such as `usb/tipd-hpd-fix`. The repository is **public**.
 
 The controller is a Windows PC running Ubuntu on WSL2. The Mac is a separate
 machine, reached over SSH for builds and over a USB-C cable (forwarded into
@@ -22,7 +23,6 @@ WSL by usbipd-win) for m1n1. PC paths and Mac paths are different namespaces.
 | [docs/reference/glossary.md](docs/reference/glossary.md) | Terms | When a word is unclear |
 | [docs/experiments/](docs/experiments/README.md) | Frozen reports with redacted evidence | To learn what has been tested |
 | [docs/failures/](docs/failures/README.md) | Failure catalogue (`F-NNN`) | Before investigating a display bug |
-| [docs/decisions/](docs/decisions/README.md) | Why things are done this way | Before changing a convention |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Branches, pull requests, commit messages | Before committing |
 | `tools/asahi` | Single entry point for the workflow; `./tools/asahi --help`, `./tools/asahi COMMAND --help` | — |
 | `tools/profiles/*.json` | Driver profiles (board, required drivers, proxy port) | Before a USB-C/DP test |
@@ -46,7 +46,10 @@ WSL by usbipd-win) for m1n1. PC paths and Mac paths are different namespaces.
   patch meant for Asahi upstream. If asked to, say why and confirm with the
   user first. Workflow tools and documentation in this repository are fine.
 - **Branches.** Never commit to `main`, `fairydust`, or `asahi`; the sync job
-  owns them. Kernel changes never go on `project`.
+  owns them and may overwrite their history. Kernel pull requests target
+  `usb/dev`, initially based on `fairydust`. Name kernel topic branches
+  `<subsystem>/<topic>` (for example `usb/tipd-hpd-fix` or `drm/dcp-hotplug`).
+  Kernel changes never go on `project`.
 - **m1n1** is an external dependency. Use it; don't modify it. The user has
   authorized AI assistance with m1n1 usage in this workflow.
 - **Credentials.** Use the configured SSH identity. Never put passwords in
@@ -95,8 +98,8 @@ cables) need the user. Ask them, and wait.
    `./tools/asahi logs`. Only then run `tmux kill-session -t asahi-hv`.
 3. `./tools/asahi session start --wait 600`, then ask the user to boot the
    m1n1 proxy entry. For a bundle with a profile, the proxy cable must be on
-   the port the profile names (`proxy_port`; ATC0 for `j413-usbc-dp`,
-   [decision 0002](docs/decisions/0002-proxy-on-atc0.md)). The launcher
+   the port the profile names (`proxy_port`; ATC0 for `j413-usbc-dp`; see
+   [port setup](docs/guides/test-a-kernel.md#use-the-right-usb-c-port)). The launcher
    refuses the wrong port. Never ask anyone to move the cable while a guest
    runs.
 4. `./tools/asahi check --wait 180`, then `./tools/asahi driver-check --live`
@@ -121,29 +124,32 @@ enforces the first two. Board-specific facts belong in a profile, not in
 code. After changing `tools/` or `tests/`, run:
 
 ```bash
-uv run --no-project --python 3.13 --with pyserial==3.5 \
-  python -m unittest discover -s tests -v
+python3 -m unittest discover -s tests
 ```
+
+CI runs the same tests and `tools/check-docs.py` on every pull request.
 
 ## Recording results
 
 After any hardware run worth citing, follow
 [Record an experiment](docs/guides/recording-an-experiment.md):
 
-1. Copy `docs/templates/experiment.md` to
-   `docs/experiments/YYYY-MM-DD-slug/README.md`, using the UTC date of the
-   first run.
-2. `./tools/asahi evidence docs/experiments/YYYY-MM-DD-slug/evidence --run-dir .asahi/runs/RUN_ID`
-   for each run, then read the output for anything identifying. Commit and
-   push the private logs with the `git` command it prints (pushing to the
-   team's private repository is part of this routine). Link logs by their
-   private URL and mark them *(private)*.
-3. Fill in results with only **PASS**, **FAIL**, **NOT TESTED**, or
-   **BLOCKED**, each marked **automated** or **manual**, each linking its
-   evidence file. Things you observed in the HV shell or that the user told
-   you are **manual**; say who observed them.
-4. Update affected failure entries and `docs/failures/README.md`, and add the
-   report to `docs/experiments/README.md`.
+1. `./tools/asahi evidence docs/experiments/YYYY-MM-DD-slug/evidence --run-dir .asahi/runs/RUN_ID`
+   for each run, using the UTC date of the first run. It starts the report
+   with Inputs and automated Results filled in, or prints rows to add.
+2. Read every exported file, public and private, for anything identifying.
+   Exact configs and source/workflow snapshots are private and unredacted;
+   never copy them into public records.
+3. Replace every `FILL IN`. Results use only **PASS**, **FAIL**,
+   **NOT TESTED**, or **BLOCKED**, each marked **automated** or **manual**
+   and linked to its evidence. Things you observed in the HV shell or that
+   the user told you are **manual**; say who observed them.
+4. Rerun the evidence command with `--finalize --yes` (a non-interactive
+   shell can't answer its prompt). It commits and pushes only that run's
+   private folder, then pins `logs.md`. Pushing to the team's private
+   repository is part of this routine.
+5. Update affected failure entries, and add the report to
+   `docs/experiments/README.md`.
 
 ## Writing documentation
 
@@ -153,8 +159,10 @@ After any hardware run worth citing, follow
 - **Guides say how; reports say what happened.** Don't add results or
   machine status to a guide. When you change a command in a guide, rerun it
   and update its **Last verified** line.
-- Never edit a merged experiment report, decision, or weekly status beyond a
+- Never edit a merged experiment report beyond a
   dated *Corrections* note. Write a new record instead.
+- Project progress, tasks, plans, and blockers belong in Jira. Keep technical
+  documentation and experiment evidence in this repository.
 - Add every new file to its folder's `README.md` index in the same change.
 - Refer to hardware by inventory ID (`MAC-01`), not by owner or hostname.
 - Write for teammates: short, plain sentences, a diagram where it helps, terms

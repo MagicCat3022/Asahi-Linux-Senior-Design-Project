@@ -1,22 +1,19 @@
 ## What and why
 
-<!-- One or two sentences. Link experiments, failure entries (F-NNN), or decisions. -->
+<!-- One or two sentences. Link relevant docs, experiments, or failure entries (F-NNN). -->
 
 ## Type
 
 - [ ] Guide or reference update
 - [ ] Experiment report
 - [ ] Failure catalogue change
-- [ ] Decision record
-- [ ] Weekly status
 - [ ] Tools or tests
 - [ ] Other:
 
 ## Checklist
 
-- [ ] `python3 tools/check-docs.py` passes
-- [ ] Tool changes: the unit tests pass
+CI runs `tools/check-docs.py` and the unit tests. It can't check these:
+
 - [ ] Guide changes: commands rerun and **Last verified** updated
-- [ ] Experiment reports: evidence copied with `./tools/asahi evidence`, read for personal data, and private logs pushed to `asahi-sdp-evidence`
-- [ ] Failure entries changed: `docs/failures/README.md` updated
+- [ ] Experiment reports: every exported file read before `evidence --finalize`
 - [ ] No binaries, keys, IP addresses, or serial numbers added

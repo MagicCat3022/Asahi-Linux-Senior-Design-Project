@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Operations sent over SSH on stdin; no permanent agent is installed on the Mac."""
+import base64
 import hashlib
 import contextlib
 import fcntl
@@ -8,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -15,6 +17,32 @@ import tarfile
 import tempfile
 
 SYSFS = Path("/sys")
+
+TOOLCHAIN_PROBE = """
+import json, os, shlex, shutil, subprocess
+tools = {}
+for name in ('CC', 'LD', 'RUSTC', 'BINDGEN', 'PAHOLE'):
+    command = os.environ.get(name, '')
+    record = {'command': command, 'executable': None, 'version': None, 'returncode': None}
+    try:
+        arguments = shlex.split(command)
+        if not arguments:
+            raise ValueError('No command selected by Kbuild')
+        record['executable'] = shutil.which(arguments[0])
+        result = subprocess.run(arguments + ['--version'], capture_output=True,
+                                text=True, timeout=10)
+        record['returncode'] = result.returncode
+        if result.returncode == 0:
+            record['version'] = (result.stdout or result.stderr).strip()
+        if result.stderr.strip() or result.returncode:
+            record['error'] = result.stderr.strip() or result.stdout.strip() or 'Version command failed'
+    except subprocess.TimeoutExpired:
+        record['error'] = 'Version command timed out after 10 seconds'
+    except (OSError, ValueError) as error:
+        record['error'] = str(error)
+    tools[name] = record
+print('ASAHI_TOOLCHAIN=' + json.dumps(tools))
+"""
 
 
 def run(args, *, capture=True, check=True):
@@ -111,6 +139,25 @@ def source_info(source):
             "diff": run(["git", "-C", str(source), "diff", "--stat"])}
 
 
+def build_inputs(source, output, config=None):
+    """Exact, private inputs; never redact these bytes or publish them as JSON."""
+    patch = subprocess.check_output(["git", "-C", str(source), "diff", "HEAD", "--binary", "--full-index"])
+    names = subprocess.check_output(["git", "-C", str(source), "ls-files", "--others", "--exclude-standard", "-z"])
+    stream = io.BytesIO()
+    with tarfile.open(fileobj=stream, mode="w:gz") as archive:
+        for name, data in ((".config", config if config is not None else (output / ".config").read_bytes()), ("source.patch", patch)):
+            info = tarfile.TarInfo(name)
+            info.size, info.mode = len(data), 0o644
+            archive.addfile(info, io.BytesIO(data))
+        for name in sorted(filter(None, names.split(b"\0"))):
+            relative = os.fsdecode(name)
+            path = source / relative
+            if not path.is_file() and not path.is_symlink():
+                raise ValueError("Cannot snapshot untracked source: " + relative)
+            archive.add(path, arcname="untracked/" + relative, recursive=False)
+    return base64.b64encode(stream.getvalue()).decode("ascii")
+
+
 def make_command(settings):
     source = Path(settings["source"]).expanduser().resolve()
     output = Path(settings.get("output") or source).expanduser().resolve()
@@ -146,6 +193,22 @@ def preflight(command, output):
         raise ValueError("The hardware build needs CONFIG_ARM64_16K_PAGES=y")
     if "CONFIG_RUST=y" in config:
         run(command + ["rustavailable"], capture=False)
+
+
+def toolchain_info(command):
+    # Kbuild exports its effective tools, including LLVM prefixes/suffixes,
+    # CROSS_COMPILE, wrappers, environment settings, and make overrides.
+    # run-command does not load or synchronize .config in the supported tree.
+    # Make splits expanded recipe newlines even inside shell quotes. Keep the
+    # command on one line; decode the fixed probe only inside Python.
+    encoded = base64.b64encode(TOOLCHAIN_PROBE.encode()).decode("ascii")
+    probe = shlex.join(["python3", "-c", "import base64; exec(base64.b64decode(" + repr(encoded) + "))"])
+    output = run(command + ["-s", "run-command", "KBUILD_RUN_COMMAND=" + probe])
+    records = [line.removeprefix("ASAHI_TOOLCHAIN=") for line in output.splitlines()
+               if line.startswith("ASAHI_TOOLCHAIN=")]
+    if len(records) != 1:
+        raise ValueError("Could not capture the Kbuild toolchain")
+    return json.loads(records[0])
 
 
 def profile_modules(profile, options):
@@ -217,6 +280,12 @@ def build(settings):
     release = release_ok(run(command + ["-s", "kernelrelease"]))
     if release == os.uname().release or os.path.lexists("/lib/modules/" + release):
         raise ValueError("Build release already installed. Use a new --localversion.")
+    toolchain = toolchain_info(command)
+    config = (output / ".config").read_bytes()
+    inputs = build_inputs(source, output, config)
+    config_hash = hashlib.sha256(config).hexdigest()
+    if source_info(source) != before:
+        raise ValueError("Source changed while recording build inputs")
     run(command + ["-j" + str(settings["jobs"]), "Image", "dtbs", "modules"], capture=False)
     with (output / "arch/arm64/boot/Image").open("rb") as stream:
         header = stream.read(64)
@@ -225,8 +294,11 @@ def build(settings):
     after = source_info(source)
     if before != after:
         raise ValueError("Source changed during the build; rerun with a stable source tree")
+    hashes = artifact_hashes(output)
+    if hashes[".config"] != config_hash:
+        raise ValueError("Config changed during the build; rerun with a stable config")
     return {**settings, **after, "output": str(output), "release": release,
-            "artifact_sha256": artifact_hashes(output)}
+            "toolchain": toolchain, "artifact_sha256": hashes, "build_inputs": inputs}
 
 
 def installed_files(release):

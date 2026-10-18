@@ -86,7 +86,7 @@ Check it with `sudo -k; sudo -n whoami`, which should print `root`.
 
 ## 4. Install the kernel build tools
 
-Kernels are compiled on the Mac ([decision 0003](../decisions/0003-native-builds-on-mac.md)).
+Kernels are compiled on the Mac with its native toolchain.
 
 **Mac:**
 

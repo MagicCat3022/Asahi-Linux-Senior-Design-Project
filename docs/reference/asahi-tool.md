@@ -15,7 +15,7 @@ flowchart LR
         launch["tools/asahi-hv-launch.py<br/>wraps m1n1's boot script"]
         serial["tools/asahi-serial.py<br/>serial recorder"]
         ps["tools/windows/Asahi-Usb.ps1<br/>usbipd wrapper"]
-        m1n1py["m1n1 Python tools<br/>(~/projects/m1n1)"]
+        m1n1py["m1n1 Python tools<br/>(~/Github/m1n1)"]
     end
     subgraph Mac["Test Mac"]
         remote["tools/asahi-remote.py<br/>sent over SSH each time"]
@@ -64,7 +64,7 @@ shows the shape.
 | --- | --- | --- |
 | `target` | The Mac's SSH login, `USER@HOST`. Update it if the Mac's IP address changes. | from `--target` |
 | `identity` | SSH key for this workflow | `~/.ssh/asahi_hv` |
-| `m1n1_dir` | m1n1 checkout on the PC | `~/projects/m1n1` |
+| `m1n1_dir` | m1n1 checkout on the PC | `~/Github/m1n1` |
 | `build_source` | Kernel source on the Mac, used when `build` has no `--source` | `~/linux-fairydust` |
 | `make_args` | `make` arguments for every build | `["LLVM=1"]` |
 | `proxy_env` | Toolchain for m1n1's Python tools; see [below](#m1n1-toolchain-on-the-pc) | not set (GNU tools) |
@@ -86,7 +86,7 @@ folder named after its UTC timestamp.
 .asahi/
   target.json              the Mac's board, root and EFI IDs, boot arguments (from discover)
   bundles/RELEASE-TIME/    one bootable bundle each; manifest.json has the checksums
-  builds/TIME/             build.log and build.json (commit, config and file hashes)
+  builds/TIME/             build.log, build.json, build-inputs.tar.gz, build-workflow.tar.gz
   latest-build.json        what stage will install next
   runs/RUN_ID/             one boot attempt each; see below
   latest-run.json          the run that check, logs, and evidence use by default
@@ -98,7 +98,8 @@ Each run folder holds:
 
 | File | Written by | Contents |
 | --- | --- | --- |
-| `boot.json` | `boot` | Bundle, release, kernel command line, m1n1 commit, and `state`: `planned`, `started`, or `exited` |
+| `boot.json` | `boot` | Bundle, release, kernel command line, m1n1 commit, workflow revision/checksums, and `state`: `planned`, `started`, or `exited` |
+| `boot-workflow.tar.gz` | `boot` | Exact workflow tools and profiles, including local edits; private evidence only |
 | `hv.log` | `boot` | Everything the hypervisor printed |
 | `serial.log` | `console` | The Mac's serial console |
 | `check.json` | `check` | What `check` found, and `passed` |
@@ -108,6 +109,45 @@ Each run folder holds:
 These logs can contain identifiers, so they never go into this repository
 as they are. [`evidence`](../guides/recording-an-experiment.md) publishes them
 safely.
+
+Build records include the workflow commit, dirty state, tool/profile hashes,
+checksums of the input archives, and a `toolchain` object with Kbuild's selected
+compiler, linker, Rust compiler, bindgen, and pahole commands and versions.
+These versions are also included in exported build summaries; see
+[recorded toolchain](kernel-config.md#recorded-toolchain).
+`build-inputs.tar.gz` holds the final
+`.config`, the tracked binary patch against the kernel commit, and non-ignored
+untracked source files. `build-workflow.tar.gz` holds the tools actually used.
+These archives remain exact and private; they are never redacted into public
+records.
+
+`evidence` copies the records and private files, saves the private files'
+checksums in `private-evidence.json`, and starts the experiment report if it
+doesn't exist. `--finalize` shows the run's uncommitted private files and,
+after you confirm (or with `--yes`), commits just that folder and pushes it.
+It then verifies the committed bytes and that the commit is on the private
+remote, and writes commit-pinned private URLs to `logs.md`. Finalization
+does not recopy evidence or retarget an already pinned record. `--skip-logs`
+omits both private logs and exact inputs; say so in the report.
+
+### Rebuilding from preserved inputs
+
+For new builds, `build-inputs.tar.gz` contains `.config` after `olddefconfig`,
+a binary-capable `source.patch` against the recorded kernel commit, and
+non-ignored untracked source under `untracked/` (including modes and symlinks).
+Start from that commit, apply `source.patch` if it isn't empty, copy the
+untracked files back to their original paths, and put `.config` in the build
+output folder. Use the recorded make arguments and toolchain versions.
+
+`build-workflow.tar.gz` and `boot-workflow.tar.gz` contain the workflow tools
+and profiles actually used at each step, including local edits. Their records
+give the project commit, whether tool files were dirty, and file checksums.
+`kernel.config` is also kept from a verified bundle when available.
+
+The archives are inputs, not a complete toolchain or operating-system image.
+Ignored source dependencies, signing material, firmware, and initramfs
+packages can change the result, so keep the original bundle when the exact
+binary matters.
 
 ## What `check` proves
 
@@ -197,14 +237,15 @@ in `boot.json`. A larger value leaves less memory for the guest.
 
 ## Changing the tool
 
-Run the tests after any change to `tools/` or `tests/`. They need no Mac:
+Run the tests after any change to `tools/` or `tests/`. They need no Mac, and
+CI runs them on every pull request:
 
 ```bash
-uv run --no-project --python 3.13 --with pyserial==3.5 \
-  python -m unittest discover -s tests -v
+python3 -m unittest discover -s tests
 ```
 
-They cover argument handling, archive and checksum safety, refusal to
+The two serial-console tests are skipped unless `pyserial` is installed.
+The tests cover argument handling, archive and checksum safety, refusal to
 overwrite modules, wrong-boot detection, serial reconnects, evidence
 redaction, profiles, `status`, and that every command has help text and
 examples. They don't test anything on hardware.

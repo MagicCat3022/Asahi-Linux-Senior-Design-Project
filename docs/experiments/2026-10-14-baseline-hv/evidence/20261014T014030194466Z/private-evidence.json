@@ -1,0 +1,10 @@
+{
+  "commit": "23a591e8074eeb0e4f779724dc350d549bcd278e",
+  "files_sha256": {
+    "guest-health.log": "c7f18b889d193a172c34ff2b2c4f5d5d320992515f98f894c3a4763126aa94d8",
+    "hv.log": "3784ee3c87df98f94c928c87be366205efd9ea98e7b8d56c76aa0d54a3dfa411",
+    "kernel.config": "81e3ad71bcf015e2c3cc08856c31410e5fcb6a6f93b60114e2792c265b5e0684",
+    "serial.log": "9e92d40ac4fbd142059dcf5bcbd5a7e1d19d3fc7a47b1862f98d3eb2d48b223e"
+  },
+  "url": "https://github.com/MagicCat3022/asahi-sdp-evidence/blob/23a591e8074eeb0e4f779724dc350d549bcd278e/2026-10-14-baseline-hv/20261014T014030194466Z/"
+}

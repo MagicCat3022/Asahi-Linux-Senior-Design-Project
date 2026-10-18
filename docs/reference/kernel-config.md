@@ -16,7 +16,7 @@ Other starting points don't work as well:
 | Starting point | Problem |
 | --- | --- |
 | `make defconfig` | Leaves out most Apple drivers |
-| `make LLVM=1 defconfig asahi.config` (the fragment in `arch/arm64/configs/`) | Builds, and the [x86 guide](../guides/x86-cross-build-qemu.md) uses it for compile checks, but it isn't the config the Mac boots with |
+| `make LLVM=1 defconfig asahi.config` (the fragment in `arch/arm64/configs/`) | Builds, but it isn't the config the Mac boots with |
 | `asahi_defconfig` | Doesn't exist in this tree |
 | `make localmodconfig` | Drops drivers that aren't loaded right now, which can include ones needed under the hypervisor |
 | A config from another distribution | Can point to signing certificates that aren't in this tree |
@@ -45,6 +45,29 @@ config holds many more Apple drivers that are also needed.
 support, or the serial console, and refuses a Zstandard initramfs without
 `CONFIG_RD_ZSTD`. USB-C display options are checked by the
 [`j413-usbc-dp` profile](asahi-tool.md#driver-profiles).
+
+## Recorded toolchain
+
+Each new `./tools/asahi build` automatically records the tools selected by
+Kbuild in `build.json` under `toolchain`. The same metadata is included in
+the experiment's exported `build.json`.
+
+| Key | Tool |
+| --- | --- |
+| `CC` | C compiler, including any wrapper or flags |
+| `LD` | Linker |
+| `RUSTC` | Rust compiler |
+| `BINDGEN` | Rust binding generator |
+| `PAHOLE` | BTF debug-information tool |
+
+For each tool, the record contains its selected `command`, the path to its
+first executable, its `--version` output, and the version command's return
+code. Kbuild supplies the commands, so LLVM paths and version suffixes,
+cross-compilers, and explicit make overrides are respected. Unavailable or
+failing version queries are recorded with `version: null` and an `error`;
+the kernel's normal build checks still determine which tools are required.
+
+This captures versions at build time.
 
 ## Tested toolchain
 

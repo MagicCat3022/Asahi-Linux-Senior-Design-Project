@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | upstream-reported · reproduced · diagnosed · fix-in-progress · fixed · wont-fix · out-of-scope |
+| Status | reproduced · diagnosed · fix-in-progress · fixed · wont-fix · out-of-scope |
 | Class | e.g. DCP timeout, PD controller state, link training, routing, suspend/resume |
 | Hardware | machines where it occurs (`MAC-01`), and where it was tried without occurring |
 | Setup | port, monitor, cable, adapter IDs |

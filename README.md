@@ -16,7 +16,7 @@ Macs, and record the results. See the [proposal](deliverables/proposal/).
 3. **Every test:** [Test a kernel](docs/guides/test-a-kernel.md), then
    [Record an experiment](docs/guides/recording-an-experiment.md).
 
-Everything else, including results, known failures, and decisions, is listed
+Everything else, including results and known failures, is listed
 in [docs/](docs/README.md).
 
 ```sh
@@ -30,14 +30,15 @@ This is the `project` branch: docs and tools only, with no kernel source.
 
 | Path | Contents |
 | --- | --- |
-| [docs/](docs/README.md) | Guides, reference, research, experiment reports, failures, decisions, weekly status |
+| [docs/](docs/README.md) | Guides, reference, research, experiment reports, failures |
 | [tools/](tools/), [tests/](tests/) | `./tools/asahi`, the build-and-test tool, and its tests |
 | [deliverables/](deliverables/README.md) | Course reports |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Branches, pull requests, commit messages |
 | [AGENTS.md](AGENTS.md) | Instructions for AI coding assistants |
 
 Kernel code lives on the `fairydust`, `asahi`, and `main` branches (daily
-copies of upstream) and on our `work/*` branches. See
+copies of upstream), our shared `usb/dev` branch, and subsystem/topic branches
+such as `usb/tipd-hpd-fix`. Kernel pull requests target `usb/dev`. See
 [Branches and the upstream sync](docs/reference/branches-and-sync.md).
 
 To check out only this branch:

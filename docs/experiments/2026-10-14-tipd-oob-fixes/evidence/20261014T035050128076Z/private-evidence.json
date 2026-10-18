@@ -1,0 +1,10 @@
+{
+  "commit": "23a591e8074eeb0e4f779724dc350d549bcd278e",
+  "files_sha256": {
+    "guest-health.log": "7806eda38193984f1c6ae22af697e6ee990aac04580eb63c14841174d8265c4e",
+    "hv.log": "82b2f2a7f57ee91fecff00eebf65f5671fcf4db41fd4841a9a578a92d0307105",
+    "kernel.config": "559193b6c3aa155eb329fe4c9796b335006dc918ae0ecc4051c09fe5ef58caf3",
+    "serial.log": "f4abdcea70bb083544d26ea963e3da564328e50fdc3dc1a312b2022a15b8db79"
+  },
+  "url": "https://github.com/MagicCat3022/asahi-sdp-evidence/blob/23a591e8074eeb0e4f779724dc350d549bcd278e/2026-10-14-tipd-oob-fixes/20261014T035050128076Z/"
+}

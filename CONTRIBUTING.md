@@ -6,7 +6,15 @@
 | --- | --- | --- |
 | `project` (default) | Documentation, workflow tools, tests, GitHub Actions | Pull requests only |
 | `main`, `fairydust`, `asahi` | Exact copies of upstream branches | The daily sync job only; never commit to them |
-| `work/*` | Kernel development, branched from a kernel branch | Owned by whoever creates it |
+| `usb/dev` | Shared USB-C and display development, initially branched from `fairydust` | Kernel pull requests |
+| `<subsystem>/<topic>` | Kernel changes, for example `usb/tipd-hpd-fix` or `drm/dcp-hotplug` | Owned by whoever creates it |
+
+The daily sync allows forced updates so the three upstream copies match even
+after upstream rewrites history. Any commits made directly on them will be
+discarded; branch kernel topics from `usb/dev` and target pull requests there.
+Use Linux-style subsystem/topic names, with a short lowercase topic and
+hyphens between words. See [branches and sync](docs/reference/branches-and-sync.md)
+for the concurrency guard and how local clones handle rewritten history.
 
 For documentation or tool changes, branch from `project`
 (`git switch -c docs/hotplug-report project`) and open a pull request back to
@@ -15,19 +23,15 @@ by commit.
 
 ## Pull requests
 
-1. Run the checks:
+1. Run the checks. CI runs the same ones on every pull request to `project`:
 
    ```bash
    python3 tools/check-docs.py
-   # if you changed tools/ or tests/:
-   uv run --no-project --python 3.13 --with pyserial==3.5 \
-     python -m unittest discover -s tests -v
+   python3 -m unittest discover -s tests
    ```
 
 2. Fill in the pull request template.
 3. Get one teammate's approval, then merge.
-
-Experiment reports should reach a pull request within a week of the run.
 
 ## Documentation
 
@@ -36,10 +40,11 @@ to name it, and which template to start from. The short version:
 
 - **Guides** say how to do something and are kept current.
 - **Experiment reports** say what happened on a run and are frozen.
-- Failures go in the **failure catalogue**; choices go in **decisions**.
+- **Jira** holds project progress, tasks, plans, and blockers.
+- Failures go in the **failure catalogue**.
 - The repository is **public**. Publish run records only through
-  `./tools/asahi evidence`, and read them before committing. Full logs go to
-  the private [`asahi-sdp-evidence`](https://github.com/MagicCat3022/asahi-sdp-evidence)
+  `./tools/asahi evidence`, which sends logs to the private
+  [`asahi-sdp-evidence`](https://github.com/MagicCat3022/asahi-sdp-evidence)
   repository; ask the owner for access.
 
 ## Commit messages

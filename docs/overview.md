@@ -56,8 +56,7 @@ flowchart LR
   console. The PC side sees two serial devices, `/dev/m1n1` and
   `/dev/m1n1-sec`.
 - **Kernels are compiled on the Mac.** It's an ARM64 machine with the right
-  toolchain, so builds match what runs
-  ([decision 0003](decisions/0003-native-builds-on-mac.md)).
+  toolchain, so builds match what runs.
 - **Everything is driven from the PC** with one tool, `./tools/asahi`, so any
   teammate or an AI assistant can run the same steps.
 
@@ -106,7 +105,7 @@ Mac's installed kernel. Any of them can be booted again later.
 | What | Where | In Git? |
 | --- | --- | --- |
 | Docs, tools, tests | This repository, `project` branch | Yes, public |
-| Kernel changes | `work/*` branches of this repository, checked out on the Mac in `~/kernel-*` | Yes, public |
+| Kernel changes | Shared `usb/dev` and subsystem/topic branches, checked out on the Mac in `~/kernel-*` | Yes, public |
 | Machine settings (Mac address, paths) | `asahi.local.json` on each PC | No |
 | Bundles, run logs, build records | `.asahi/` on each PC | No |
 | Run logs we cite | Private repository [`asahi-sdp-evidence`](https://github.com/MagicCat3022/asahi-sdp-evidence) | Yes, team only |

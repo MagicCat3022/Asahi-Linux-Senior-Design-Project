@@ -1,8 +1,9 @@
 # Fairydust status and upstream issues
 
 **Snapshot:** late September 2026, converted from *Fairydust Research &
-Current Status.docx*. Issue and PR states rechecked on 2026-10-14. The
-per-issue details now live in the [failure catalogue](../failures/).
+Current Status.docx*. Issue and PR states rechecked on 2026-10-14. These are
+upstream reports used as background research; the team has not reproduced
+them in its experiments.
 
 ## Current fairydust status
 
@@ -23,15 +24,15 @@ per-issue details now live in the [failure catalogue](../failures/).
 
 All are in [AsahiLinux/linux](https://github.com/AsahiLinux/linux/issues).
 
-| Issue | Summary | State (2026-10-14) | Catalogue |
-| --- | --- | --- | --- |
-| [#634](https://github.com/AsahiLinux/linux/issues/634) | Hot-plug stops working until reboot (M1 Pro); two causes | Open | [F-001](../failures/F-001-dcp-false-crash-on-poweroff.md), [F-002](../failures/F-002-cd321x-no-dp-after-usb-failure.md) |
-| [#611](https://github.com/AsahiLinux/linux/issues/611) | Sink's swing/pre-emphasis requests never applied to ATC PHY | Open | [F-003](../failures/F-003-link-training-swing-not-applied.md) |
-| [#571](https://github.com/AsahiLinux/linux/issues/571) | Link bounces with a VIA Labs hub (M2 Air) | Open | [F-004](../failures/F-004-via-labs-hub-link-bounce.md) |
-| [#579](https://github.com/AsahiLinux/linux/issues/579) | Studio Display: unhandled `INACTIVE_SINK_DETECTED` | Open | [F-005](../failures/F-005-studio-display-inactive-sink.md) |
-| [#474](https://github.com/AsahiLinux/linux/issues/474) | Monitor identification and layout don't update | Open | [F-006](../failures/F-006-stale-monitor-identification.md) |
-| [#637](https://github.com/AsahiLinux/linux/issues/637) | DP output on any port, not one "blessed" port | Closed, not planned | [F-007](../failures/F-007-single-blessed-dp-port.md) |
-| PR [#510](https://github.com/AsahiLinux/linux/pull/510) | Suspend/resume with DP active | Open | [F-008](../failures/F-008-dp-suspend-resume.md) |
+| Issue | Summary | State (2026-10-14) |
+| --- | --- | --- |
+| [#634](https://github.com/AsahiLinux/linux/issues/634) | Hot-plug stops working until reboot (M1 Pro); two causes | Open |
+| [#611](https://github.com/AsahiLinux/linux/issues/611) | Sink's swing/pre-emphasis requests never applied to ATC PHY | Open |
+| [#571](https://github.com/AsahiLinux/linux/issues/571) | Link bounces with a VIA Labs hub (M2 Air) | Open |
+| [#579](https://github.com/AsahiLinux/linux/issues/579) | Studio Display: unhandled `INACTIVE_SINK_DETECTED` | Open |
+| [#474](https://github.com/AsahiLinux/linux/issues/474) | Monitor identification and layout don't update | Open |
+| [#637](https://github.com/AsahiLinux/linux/issues/637) | DP output on any port, not one "blessed" port | Closed, not planned |
+| PR [#510](https://github.com/AsahiLinux/linux/pull/510) | Suspend/resume with DP active | Open |
 
 ## USB4 / Thunderbolt
 

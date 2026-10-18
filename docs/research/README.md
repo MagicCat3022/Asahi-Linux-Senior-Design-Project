@@ -12,5 +12,6 @@ date, update it or add a line at the top pointing to what replaced it.
 | [atc-phy-and-tipd-overview.md](atc-phy-and-tipd-overview.md) | What the ATC PHY and TIPD drivers do (incomplete) |
 | [m1n1-overview.md](m1n1-overview.md) | m1n1 proxy and hypervisor modes; reading registers |
 
-Failures belong in the [failure catalogue](../failures/), not here; a research
-note can link to them.
+Keep upstream issue summaries here as background research. Failures observed
+in team experiments belong in the [failure catalogue](../failures/), with
+links to the experiment evidence.
