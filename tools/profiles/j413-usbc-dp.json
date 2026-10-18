@@ -1,0 +1,32 @@
+{
+  "name": "j413-usbc-dp",
+  "description": "USB-C DisplayPort drivers on the MacBook Air M2 (J413)",
+  "board": "MacBook Air M2 (J413)",
+  "compatible": "apple,j413",
+  "proxy_iodev": 4,
+  "proxy_port": "ATC0, the left rear USB-C port next to MagSafe",
+  "options": {
+    "CONFIG_ARCH_APPLE": null,
+    "CONFIG_TYPEC": "typec",
+    "CONFIG_TYPEC_TPS6598X_CORE": "tps6598x-core",
+    "CONFIG_TYPEC_TPS6598X": "tps6598x",
+    "CONFIG_TYPEC_DP_ALTMODE": "typec_displayport",
+    "CONFIG_PHY_APPLE_ATC": "phy-apple-atc",
+    "CONFIG_MUX_APPLE_DPXBAR": "mux-apple-display-crossbar",
+    "CONFIG_DRM_APPLE": "appledrm",
+    "CONFIG_I2C_APPLE": "i2c-pasemi-platform",
+    "CONFIG_USB_DWC3_APPLE": "dwc3-apple",
+    "CONFIG_USB_ROLE_SWITCH": "roles",
+    "CONFIG_APPLE_DART": "apple-dart",
+    "CONFIG_APPLE_TUNABLE": "apple-tunable",
+    "CONFIG_APPLE_MAILBOX": null,
+    "CONFIG_APPLE_RTKIT": null
+  },
+  "bindings": {
+    "platform/phy-apple-atc": "503000000.phy",
+    "platform/apple-display-crossbar": "50304c000.mux",
+    "platform/apple-dcp": "271c00000.dcp",
+    "platform/apple-drm": "soc:display-subsystem"
+  },
+  "pd_address": "003f"
+}

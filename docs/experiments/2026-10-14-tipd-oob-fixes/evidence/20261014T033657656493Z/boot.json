@@ -1,0 +1,34 @@
+{
+  "run": "20261014T033657656493Z",
+  "bundle": "<project>/.asahi/bundles/7.1.13-fairydust-sdp-tipd-301e2ba4-20261014a-20261014T033557783350Z",
+  "release": "7.1.13-fairydust-sdp-tipd-301e2ba4-20261014a",
+  "cmdline": "root=UUID=<root-uuid> ro rootflags=subvol=root earlycon console=tty0 console=ttySAC0,1500000 rootwait nokaslr asahi_sdp.run=20261014T033657656493Z",
+  "command": [
+    "uv",
+    "run",
+    "--no-project",
+    "--python",
+    "3.13",
+    "--with-requirements",
+    "~/projects/m1n1/requirements.txt",
+    "bash",
+    "~/projects/m1n1/proxyclient/tools/run_guest_kernel.sh",
+    "-e",
+    "<efi-partuuid>",
+    "-k",
+    "<project>/.asahi/bundles/7.1.13-fairydust-sdp-tipd-301e2ba4-20261014a-20261014T033557783350Z/arch/arm64/boot/Image",
+    "<project>/.asahi/bundles/7.1.13-fairydust-sdp-tipd-301e2ba4-20261014a-20261014T033557783350Z",
+    "root=UUID=<root-uuid> ro rootflags=subvol=root earlycon console=tty0 console=ttySAC0,1500000 rootwait nokaslr asahi_sdp.run=20261014T033657656493Z",
+    "<project>/.asahi/bundles/7.1.13-fairydust-sdp-tipd-301e2ba4-20261014a-20261014T033557783350Z/initramfs.img"
+  ],
+  "created": "20261014T033657999372Z",
+  "state": "exited",
+  "m1n1_commit": "ce2b8a43cea4220b602af1005dc9dbfc59c9624e",
+  "host_toolchain": {
+    "CC": "/usr/lib/llvm-22/bin/clang --target=aarch64-linux-gnu- -pipe -Wall -march=armv8.4-a",
+    "LD": "~/.local/lld-shim/ld.lld -maarch64elf --pie",
+    "OBJCOPY": "/usr/lib/llvm-22/bin/llvm-objcopy",
+    "NM": "/usr/lib/llvm-22/bin/llvm-nm"
+  },
+  "exit_code": 1
+}

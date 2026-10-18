@@ -1,0 +1,28 @@
+{
+  "run": "20261014T013041090133Z",
+  "bundle": "<project>/.asahi/bundles/7.1.13-fairydust+-20261014T005552664357Z",
+  "release": "7.1.13-fairydust+",
+  "cmdline": "root=UUID=<root-uuid> ro rootflags=subvol=root earlycon console=tty0 console=ttySAC0,1500000 rootwait nokaslr asahi_sdp.run=20261014T013041090133Z",
+  "command": [
+    "uv",
+    "run",
+    "--no-project",
+    "--python",
+    "3.13",
+    "--with-requirements",
+    "~/projects/m1n1/requirements.txt",
+    "bash",
+    "~/projects/m1n1/proxyclient/tools/run_guest_kernel.sh",
+    "-e",
+    "<efi-partuuid>",
+    "-k",
+    "<project>/.asahi/bundles/7.1.13-fairydust+-20261014T005552664357Z/arch/arm64/boot/Image",
+    "<project>/.asahi/bundles/7.1.13-fairydust+-20261014T005552664357Z",
+    "root=UUID=<root-uuid> ro rootflags=subvol=root earlycon console=tty0 console=ttySAC0,1500000 rootwait nokaslr asahi_sdp.run=20261014T013041090133Z",
+    "<project>/.asahi/bundles/7.1.13-fairydust+-20261014T005552664357Z/initramfs.img"
+  ],
+  "created": "20261014T013041372736Z",
+  "state": "exited",
+  "m1n1_commit": "ce2b8a43cea4220b602af1005dc9dbfc59c9624e",
+  "exit_code": 1
+}

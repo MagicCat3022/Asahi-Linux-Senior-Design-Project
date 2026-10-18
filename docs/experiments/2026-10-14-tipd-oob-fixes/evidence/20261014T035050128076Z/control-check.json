@@ -1,0 +1,11 @@
+{
+  "checked_at": "2026-10-14T03:53:58.642811+00:00",
+  "interrupt": "HV/USER_INTERRUPT shell observed",
+  "context": "ctx returned CPU 0 EL1h register and code context",
+  "resume": "cont returned from exception",
+  "ssh_after_resume": "check passed with exact launch marker, candidate release and original root",
+  "controller_alive_after_resume": true,
+  "driver_check_passed": true,
+  "deferred_devices": [],
+  "external_display_connected": false
+}

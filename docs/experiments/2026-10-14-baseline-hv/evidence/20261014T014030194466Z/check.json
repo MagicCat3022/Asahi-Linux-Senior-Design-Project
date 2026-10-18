@@ -1,0 +1,34 @@
+{
+  "checked": "20261014T014456254961Z",
+  "mode": "hv",
+  "passed": true,
+  "release": "7.1.13-fairydust+",
+  "model": "Apple MacBook Air (13-inch, M2, 2022)",
+  "compatible": "apple,j413",
+  "cmdline": "root=UUID=<root-uuid> ro rootflags=subvol=root earlycon console=tty0 console=ttySAC0,1500000 rootwait nokaslr asahi_sdp.run=20261014T014030194466Z",
+  "root_uuid": "<root-uuid>",
+  "root_source": "/dev/nvme0n1p8[/root]",
+  "root_fstype": "btrfs",
+  "root_options": "rw,relatime,seclabel,compress=zstd:1,ssd,discard=async,space_cache=v2,subvolid=256,subvol=/root",
+  "efi_partuuid": "<efi-partuuid>",
+  "boot_id": "<uuid-1>",
+  "ssh_enabled": "enabled",
+  "ssh_active": "active",
+  "modules_present": true,
+  "sudo": true,
+  "boot_artifacts_available": true,
+  "kernel_config": {
+    "CONFIG_BLK_DEV_INITRD": "y",
+    "CONFIG_RD_ZSTD": "y",
+    "CONFIG_ARM64_16K_PAGES": "y",
+    "CONFIG_SERIAL_SAMSUNG_CONSOLE": "y"
+  },
+  "configuration_source": "/boot/config-7.1.13-fairydust+",
+  "artifact_sha256": {
+    "arch/arm64/boot/Image": "23a745120bd5d4e4f975e462ab906ed42f8635c6e60f59b5b0bb839756e3a562",
+    "initramfs.img": "65406bf5deb12c834c095c56de055efa88b0ef9fdb3d10cce22c8f9d203b32a3",
+    "System.map": "88bbf7f9d2e5d184894a45f5ed87a70506d58001d94d3e2a14af2cbc95e91104",
+    ".config": "81e3ad71bcf015e2c3cc08856c31410e5fcb6a6f93b60114e2792c265b5e0684",
+    "arch/arm64/boot/dts/apple/t8112-j413.dtb": "9831d42f9c271ce35dd3e32b5c8298e1c13849568853aea0779f40bb67377b80"
+  }
+}

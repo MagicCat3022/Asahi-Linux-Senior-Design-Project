@@ -1,0 +1,6 @@
+/.asahi/
+/asahi.local.json
+/hv-bundle/
+/hv-bundle.tar.gz
+__pycache__/
+*.pyc

@@ -1,0 +1,52 @@
+{
+  "source": "~/kernel-tipd-oob-fixes",
+  "output": "~/kernel-tipd-oob-fixes",
+  "make_args": [
+    "LLVM=1",
+    "LOCALVERSION=-sdp-tipd-301e2ba4-20261014a"
+  ],
+  "jobs": 4,
+  "driver_profile": {
+    "name": "j413-usbc-dp",
+    "compatible": "apple,j413",
+    "options": {
+      "CONFIG_ARCH_APPLE": null,
+      "CONFIG_TYPEC": "typec",
+      "CONFIG_TYPEC_TPS6598X_CORE": "tps6598x-core",
+      "CONFIG_TYPEC_TPS6598X": "tps6598x",
+      "CONFIG_TYPEC_DP_ALTMODE": "typec_displayport",
+      "CONFIG_PHY_APPLE_ATC": "phy-apple-atc",
+      "CONFIG_MUX_APPLE_DPXBAR": "mux-apple-display-crossbar",
+      "CONFIG_DRM_APPLE": "appledrm",
+      "CONFIG_I2C_APPLE": "i2c-pasemi-platform",
+      "CONFIG_USB_DWC3_APPLE": "dwc3-apple",
+      "CONFIG_USB_ROLE_SWITCH": "roles",
+      "CONFIG_APPLE_DART": "apple-dart",
+      "CONFIG_APPLE_TUNABLE": "apple-tunable",
+      "CONFIG_APPLE_MAILBOX": null,
+      "CONFIG_APPLE_RTKIT": null
+    },
+    "bindings": {
+      "platform/phy-apple-atc": "503000000.phy",
+      "platform/apple-display-crossbar": "50304c000.mux",
+      "platform/apple-dcp": "271c00000.dcp",
+      "platform/apple-drm": "soc:display-subsystem"
+    },
+    "pd_address": "003f"
+  },
+  "fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "commit": "301e2ba4004a33f7c808489dc1b5951e41c5c09b",
+  "dirty": false,
+  "diff": "",
+  "release": "7.1.13-fairydust-sdp-tipd-301e2ba4-20261014a",
+  "build_record": "20261014T032654654522Z",
+  "module_count": 5805,
+  "artifact_sha256": {
+    ".config": "559193b6c3aa155eb329fe4c9796b335006dc918ae0ecc4051c09fe5ef58caf3",
+    "arch/arm64/boot/Image": "663cac931b81607f62f1a077fe26e2b0fd254fddb058e36db56d26a5a4f4f7d1",
+    "System.map": "4717d08ce1fb128503510a09f4d90852e11fa970e60921f5fe350966d406c529",
+    "modules.order": "454fa5bf8a320bad0c5ac1ba7f9ceb4bc14a35cb5390aef95c774ff5890569d9",
+    "Module.symvers": "01b8c08cc16eba9d3600b21c6ad156d56587e270432babdeb59d95ab64a0cb5d",
+    "arch/arm64/boot/dts/apple/t8112-j413.dtb": "9831d42f9c271ce35dd3e32b5c8298e1c13849568853aea0779f40bb67377b80"
+  }
+}

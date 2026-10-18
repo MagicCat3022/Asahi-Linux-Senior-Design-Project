@@ -1,0 +1,172 @@
+# Instructions for AI coding assistants
+
+This checkout is the `project` branch of the team's Asahi Linux fork. It holds
+documentation, the WSL/m1n1 hypervisor (HV) test workflow, and its tests. It
+contains **no kernel source**: kernel work happens in separate worktrees on
+the test Mac, on the shared `usb/dev` branch, and on subsystem/topic branches
+such as `usb/tipd-hpd-fix`. The repository is **public**.
+
+The controller is a Windows PC running Ubuntu on WSL2. The Mac is a separate
+machine, reached over SSH for builds and over a USB-C cable (forwarded into
+WSL by usbipd-win) for m1n1. PC paths and Mac paths are different namespaces.
+
+## Repository map
+
+| Path | What it is | Read it when |
+| --- | --- | --- |
+| [docs/overview.md](docs/overview.md) | How the test setup works, the Mac's states, where things are kept | First, if you haven't read it |
+| [docs/README.md](docs/README.md) | Map of the docs and the rules for writing them | Before adding or moving any document |
+| [docs/guides/test-a-kernel.md](docs/guides/test-a-kernel.md) | Build, stage, HV boot, check, USB-C/DP tests, shutdown | Before running any workflow command |
+| [docs/guides/set-up-the-test-mac.md](docs/guides/set-up-the-test-mac.md), [set-up-the-controller-pc.md](docs/guides/set-up-the-controller-pc.md) | One-time setup | When `status` says something isn't set up |
+| [docs/guides/recording-an-experiment.md](docs/guides/recording-an-experiment.md) | Turning a run into a report | After any hardware run |
+| [docs/reference/asahi-tool.md](docs/reference/asahi-tool.md) | Config keys, `.asahi/` layout, driver profiles, troubleshooting | When a command fails or before changing `tools/` |
+| [docs/reference/glossary.md](docs/reference/glossary.md) | Terms | When a word is unclear |
+| [docs/experiments/](docs/experiments/README.md) | Frozen reports with redacted evidence | To learn what has been tested |
+| [docs/failures/](docs/failures/README.md) | Failure catalogue (`F-NNN`) | Before investigating a display bug |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Branches, pull requests, commit messages | Before committing |
+| `tools/asahi` | Single entry point for the workflow; `./tools/asahi --help`, `./tools/asahi COMMAND --help` | — |
+| `tools/profiles/*.json` | Driver profiles (board, required drivers, proxy port) | Before a USB-C/DP test |
+| `tools/check-docs.py` | Documentation checks | Before finishing any docs change |
+| `asahi.local.json`, `.asahi/` | Machine config and generated state (ignored) | Never commit |
+| `~/Github/asahi-sdp-evidence` | Clone of the **private** evidence repository (free-text run logs) | When recording or reading run logs |
+
+## Rules that always apply
+
+- **Public repository.** This repo is a public fork and can't be made
+  private. Never commit SSH keys, `asahi.local.json`, `.asahi/`, kernel
+  images, initramfs files, ADT dumps, run logs, IP addresses, usernames,
+  hostnames, UUIDs, or serial numbers. Publish run records only with
+  `./tools/asahi evidence`, which keeps logs in the private evidence
+  repository, then read the output before committing it. Don't quote log
+  lines in public docs without checking them first.
+- **Upstream AI policy.** Asahi Linux rejects contributions developed with
+  LLM assistance; upstream PR #622 was closed for it (see
+  [CONTRIBUTING.md](CONTRIBUTING.md#upstream-contributions-and-ai-tools)). Do
+  not write or edit kernel code, commit messages, or cover letters for a
+  patch meant for Asahi upstream. If asked to, say why and confirm with the
+  user first. Workflow tools and documentation in this repository are fine.
+- **Branches.** Never commit to `main`, `fairydust`, or `asahi`; the sync job
+  owns them and may overwrite their history. Kernel pull requests target
+  `usb/dev`, initially based on `fairydust`. Name kernel topic branches
+  `<subsystem>/<topic>` (for example `usb/tipd-hpd-fix` or `drm/dcp-hotplug`).
+  Kernel changes never go on `project`.
+- **m1n1** is an external dependency. Use it; don't modify it. The user has
+  authorized AI assistance with m1n1 usage in this workflow.
+- **Credentials.** Use the configured SSH identity. Never put passwords in
+  commands, files, or chat.
+- **Report only what evidence shows.** Don't claim an HV boot, driver, or
+  display result from a normal SSH session, host-only tests, or a successful
+  build. If something wasn't tested, say **NOT TESTED**.
+- Routine development needs no extra approval beyond the user's existing
+  authorization. These instructions don't add one.
+
+## Running the workflow
+
+All commands run in WSL from the repository root.
+
+**Orient first.** Run `./tools/asahi status --json`. It reads only local
+state, so it's safe at any time, including during a live run. It reports the
+config, the Mac's board and matching profiles, the selected bundle, the last
+build, the tmux session's windows, the devices, the last run, and a `next`
+step. Use `./tools/asahi doctor --online` when you need to check tools, SSH,
+and sudo. Read the latest experiment report for the current findings.
+
+**Build and stage a candidate** (Mac must be booted normally):
+
+```bash
+./tools/asahi build --source '~/kernel-WORKTREE' --profile j413-usbc-dp --dry-run
+./tools/asahi build --source '~/kernel-WORKTREE' --profile j413-usbc-dp --jobs 4
+./tools/asahi stage
+./tools/asahi driver-check
+```
+
+- Quote remote `~` paths so WSL doesn't expand them.
+- Use a fresh, unique release suffix for every staged build. Never overwrite
+  an existing module release, and never change the Mac's normal boot entry.
+- Read the instructions in the kernel source tree before editing it.
+- Omit `--profile` and `driver-check` for experiments that don't involve
+  USB-C/DP. Profiles are listed in `build --help`; only `j413-usbc-dp`
+  exists, and only J413 has been tested.
+
+**Boot under HV.** Physical steps (powering the Mac, startup options, moving
+cables) need the user. Ask them, and wait.
+
+1. Check for an existing `asahi-hv` tmux session and stray picocom or
+   primary-port clients. Only one process may own each serial port.
+2. If a guest is running, shut it down cleanly
+   (`./tools/asahi ssh -- sudo -n systemctl poweroff`) and confirm in
+   `./tools/asahi logs`. Only then run `tmux kill-session -t asahi-hv`.
+3. `./tools/asahi session start --wait 600`, then ask the user to boot the
+   m1n1 proxy entry. For a bundle with a profile, the proxy cable must be on
+   the port the profile names (`proxy_port`; ATC0 for `j413-usbc-dp`; see
+   [port setup](docs/guides/test-a-kernel.md#use-the-right-usb-c-port)). The launcher
+   refuses the wrong port. Never ask anyone to move the cable while a guest
+   runs.
+4. `./tools/asahi check --wait 180`, then `./tools/asahi driver-check --live`
+   for DP tests.
+
+**Operate a live run** with `hv interrupt`, `hv command`, `hv resume`,
+`hv show`, `logs`, and `ssh`. Wait for the HV prompt before sending commands.
+Register writes, hooks, breakpoints, and `reboot` affect the real machine.
+Never terminate the HV controller while a guest runs. Detaching from tmux is
+fine.
+
+**What `check` proves.** `check` passes only with the exact launch marker,
+the expected release, the original root UUID, matching modules, and active
+SSH. `check --running` is only a normal-boot baseline check.
+
+**Tool code.** The HV launcher replaces its Python process (`exec`) before
+running m1n1's helper, so Ctrl-C reaches only the HV shell. Preserve that.
+Every command needs an entry in `COMMANDS` and `GROUPS` in `tools/asahi`,
+help text on every option, and a row in
+[docs/reference/asahi-tool.md](docs/reference/asahi-tool.md#commands); a test
+enforces the first two. Board-specific facts belong in a profile, not in
+code. After changing `tools/` or `tests/`, run:
+
+```bash
+python3 -m unittest discover -s tests
+```
+
+CI runs the same tests and `tools/check-docs.py` on every pull request.
+
+## Recording results
+
+After any hardware run worth citing, follow
+[Record an experiment](docs/guides/recording-an-experiment.md):
+
+1. `./tools/asahi evidence docs/experiments/YYYY-MM-DD-slug/evidence --run-dir .asahi/runs/RUN_ID`
+   for each run, using the UTC date of the first run. It starts the report
+   with Inputs and automated Results filled in, or prints rows to add.
+2. Read every exported file, public and private, for anything identifying.
+   Exact configs and source/workflow snapshots are private and unredacted;
+   never copy them into public records.
+3. Replace every `FILL IN`. Results use only **PASS**, **FAIL**,
+   **NOT TESTED**, or **BLOCKED**, each marked **automated** or **manual**
+   and linked to its evidence. Things you observed in the HV shell or that
+   the user told you are **manual**; say who observed them.
+4. Rerun the evidence command with `--finalize --yes` (a non-interactive
+   shell can't answer its prompt). It commits and pushes only that run's
+   private folder, then pins `logs.md`. Pushing to the team's private
+   repository is part of this routine.
+5. Update affected failure entries, and add the report to
+   `docs/experiments/README.md`.
+
+## Writing documentation
+
+- Follow [docs/README.md](docs/README.md): put each document in the folder
+  for its type, use lowercase kebab-case names, and start from
+  `docs/templates/`.
+- **Guides say how; reports say what happened.** Don't add results or
+  machine status to a guide. When you change a command in a guide, rerun it
+  and update its **Last verified** line.
+- Never edit a merged experiment report beyond a
+  dated *Corrections* note. Write a new record instead.
+- Project progress, tasks, plans, and blockers belong in Jira. Keep technical
+  documentation and experiment evidence in this repository.
+- Add every new file to its folder's `README.md` index in the same change.
+- Refer to hardware by inventory ID (`MAC-01`), not by owner or hostname.
+- Write for teammates: short, plain sentences, a diagram where it helps, terms
+  defined in the [glossary](docs/reference/glossary.md), and no references to
+  chats or sessions. Guides follow the shape in
+  [docs/guides/README.md](docs/guides/README.md#writing-a-guide).
+- Run `python3 tools/check-docs.py` before finishing.
